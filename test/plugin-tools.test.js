@@ -86,3 +86,54 @@ test('后台 host-bash 使用 DSH job id 时 host_job_log 可以读取', async (
   assert.equal(result.status, 'succeeded')
   assert.equal(result.log, 'hello')
 })
+
+test('host_review_changes 按主机 ID 列出 AI 文件变更', async () => {
+  const registered = []
+  let filter
+  const tools = { register(definition) { registered.push(definition) } }
+  const runner = {
+    async list() { return [{ hostId: 'h1', displayName: 'one', online: true }] },
+    listChanges(value) { filter = value; return [] },
+  }
+  registerHostTools({ tools, runner })
+  const reviewTool = registered.find((item) => item.name === 'host_review_changes')
+  await reviewTool.execute({ host: 'one', status: 'pending' })
+  assert.equal(filter.hostId, 'h1')
+  assert.equal(filter.status, 'pending')
+})
+
+test('host_write_file 将显示名解析为主机 ID 并标记 AI 来源', async () => {
+  const registered = []
+  let input
+  const tools = { register(definition) { registered.push(definition) } }
+  const runner = {
+    async list() { return [{ hostId: 'h1', displayName: 'one', online: true }] },
+    async writeRemoteFile(value) { input = value; return { changeId: 'c1', source: value.source } },
+  }
+  registerHostTools({ tools, runner })
+  const writeTool = registered.find((item) => item.name === 'host_write_file')
+  const result = await writeTool.execute({ host: 'one', path: '/srv/a.txt', content: 'new', expected_version: 'v1', description: 'update' })
+  assert.equal(input.host, 'h1')
+  assert.equal(input.source, 'ai')
+  assert.equal(result.changeId, 'c1')
+})
+
+test('显示名重名时工具层拒绝并提示 HOST_AMBIGUOUS', async () => {
+  const registered = []
+  const tools = { register(definition) { registered.push(definition) } }
+  const runner = {
+    async list() { return [
+      { hostId: 'h1', displayName: 'dup', online: true },
+      { hostId: 'h2', displayName: 'dup', online: true },
+    ] },
+    async listFiles() { throw new Error('should not resolve') },
+  }
+  registerHostTools({ tools, runner })
+  const listTool = registered.find((item) => item.name === 'host_list_files')
+  await assert.rejects(listTool.execute({ host: 'dup', path: '/tmp' }), (error) => {
+    assert.equal(error.code, 'HOST_AMBIGUOUS')
+    assert.match(error.message, /h1/)
+    assert.match(error.message, /h2/)
+    return true
+  })
+})

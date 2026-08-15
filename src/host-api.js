@@ -87,9 +87,8 @@ function publicHost(host, currentHostId, taskStats = {}) {
     last_error: host.lastError,
     last_error_at: host.lastErrorAt,
     connection_started_at: host.connectionStartedAt,
-    task_stats: host.taskStats,
     connection_duration: formatDuration(host.connectionStartedAt),
-    task_stats: taskStats,
+    task_stats: host.taskStats ?? taskStats,
     current: host.hostId === currentHostId,
   }
 }

@@ -15,6 +15,7 @@ jobs.json
 .env*
 !.env.example
 .DS_Store
+.playwright-cli/
 
 # Project instructions stay local and are never published.
 AGENTS.md

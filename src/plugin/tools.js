@@ -91,7 +91,17 @@ function formatHosts(hosts, currentHostId) {
 async function requireHost(runner, requestedHost) {
   const hosts = await runner.list()
   const current = runner.getCurrentHost?.() ?? null
-  if (requestedHost) return requestedHost
+  if (requestedHost) {
+    if (hosts.some((host) => host.hostId === requestedHost)) return requestedHost
+    // 与 resolveTarget 一致：显示名重名时拒绝，避免静默选中第一台。
+    const byName = hosts.filter((host) => host.displayName === requestedHost)
+    if (byName.length === 1) return byName[0].hostId
+    if (byName.length > 1) {
+      const listed = byName.map((host) => `${host.displayName} (${host.hostId})`).join(', ')
+      throw codedError('HOST_AMBIGUOUS', `ambiguous host: ${listed}`)
+    }
+    return requestedHost
+  }
   if (current) return current.hostId
   if (hosts.length === 1) return hosts[0].hostId
   if (hosts.length === 0) throw codedError('HOST_NOT_FOUND', 'host not found')
