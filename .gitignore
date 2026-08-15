@@ -1,0 +1,22 @@
+node_modules/
+
+# Local DSH runtime state and generated SSH credentials
+.dsh/
+keys/
+logs/
+hosts.json
+jobs.json
+*.key
+*.pem
+*.crt
+*.log
+
+# Local configuration and editor files
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Project instructions stay local and are never published.
+AGENTS.md
+CLAUDE.md
