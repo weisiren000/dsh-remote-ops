@@ -49,6 +49,18 @@ function contentVersion(content) {
   return createHash('sha256').update(content).digest('hex')
 }
 
+async function replaceRemoteFile(sftp, temporaryPath, targetPath) {
+  if (typeof sftp.ext_openssh_rename === 'function') {
+    try {
+      await call(sftp, 'ext_openssh_rename', temporaryPath, targetPath)
+      return
+    } catch (error) {
+      if (!/does not support this extended request/i.test(error?.message ?? '')) throw error
+    }
+  }
+  await call(sftp, 'rename', temporaryPath, targetPath)
+}
+
 export async function listSftpDirectory(connection, remotePath) {
   const pathValue = validateRemotePath(remotePath)
   const sftp = await openSftp(connection)
@@ -140,7 +152,7 @@ export async function writeSftpFile(connection, remotePath, content, expectedVer
     }
     await call(sftp, 'close', handle)
     handle = undefined
-    await call(sftp, 'rename', temporaryPath, pathValue)
+    await replaceRemoteFile(sftp, temporaryPath, pathValue)
     return { path: pathValue, size: data.length }
   } catch (error) {
     await call(sftp, 'unlink', temporaryPath).catch(() => {})

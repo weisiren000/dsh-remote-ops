@@ -187,10 +187,11 @@ function fakeSftpConnection(initialFiles) {
     },
     close(_handle, callback) { callback(null) },
     rename(from, to, callback) { files.set(to, files.get(from)); files.delete(from); callback(null) },
+    ext_openssh_rename(from, to, callback) { files.set(to, files.get(from)); files.delete(from); callback(null) },
     unlink(remotePath, callback) { files.delete(remotePath); callback(null) },
     end() { closed = true },
   }
-  return { files, get closed() { return closed }, connection: { sftp: (callback) => callback(null, sftp) } }
+  return { files, sftp, get closed() { return closed }, connection: { sftp: (callback) => callback(null, sftp) } }
 }
 
 test('SFTP 适配器真实使用 SFTP read/write/rename/unlink 调用', async () => {
@@ -203,4 +204,16 @@ test('SFTP 适配器真实使用 SFTP read/write/rename/unlink 调用', async ()
   await deleteSftpFile(remote.connection, '/srv/a.txt')
   assert.equal(remote.files.has('/srv/a.txt'), false)
   assert.equal(remote.closed, true)
+})
+
+test('SFTP 写入优先使用 OpenSSH 原子替换扩展覆盖已有文件', async () => {
+  const remote = fakeSftpConnection([['/srv/a.txt', 'old']])
+  let standardRenameCalled = false
+  remote.sftp.rename = (_from, _to, callback) => {
+    standardRenameCalled = true
+    callback(new Error('standard rename should not be called'))
+  }
+  await writeSftpFile(remote.connection, '/srv/a.txt', 'new')
+  assert.equal(remote.files.get('/srv/a.txt'), 'new')
+  assert.equal(standardRenameCalled, false)
 })
