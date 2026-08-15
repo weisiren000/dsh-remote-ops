@@ -1,6 +1,6 @@
 export const CSS = `
-  .remoteWorkspace, .remoteWorkspace__launcher { --ro-bg: var(--dsw-alias-bg-base, #181818); --ro-panel: var(--dsw-alias-bg-layer-2, #202020); --ro-panel-2: var(--dsw-alias-bg-layer-3, #272727); --ro-line: var(--dsw-alias-border-l2, #303030); --ro-text: var(--dsw-alias-label-primary, #ededed); --ro-muted: var(--dsw-alias-label-secondary, #a2a2a2); --ro-dim: var(--dsw-alias-label-tertiary, #707070); --ro-accent: var(--dsw-alias-brand-primary, #4da1ff); --ro-danger: var(--dsw-alias-label-error, #ee7d87); --ro-success: var(--dsw-alias-state-success-primary, #69cf97); color: var(--ro-text); }
-  .remoteOps { --ro-bg: var(--dsw-alias-bg-module-platform, #fff); --ro-panel: var(--dsw-alias-bg-layer-2, #f7f7f7); --ro-panel-2: var(--dsw-alias-bg-layer-3, #ededed); --ro-line: var(--dsw-alias-border-l2, #dedede); --ro-text: var(--dsw-alias-label-primary, #202020); --ro-muted: var(--dsw-alias-label-secondary, #666); --ro-dim: var(--dsw-alias-label-tertiary, #888); --ro-accent: var(--dsw-alias-brand-primary, #4d6bfe); --ro-danger: var(--dsw-alias-label-error, #d54941); --ro-success: var(--dsw-alias-state-success-primary, #1f9d61); color: var(--ro-text); }
+  .remoteWorkspace, .remoteWorkspace__launcher { --ro-bg: var(--dsw-alias-bg-base, #181818); --ro-panel: var(--dsw-alias-bg-layer-2, #202020); --ro-panel-2: var(--dsw-alias-bg-layer-3, #272727); --ro-line: var(--dsw-alias-border-l2, #303030); --ro-text: var(--dsw-alias-label-primary, #ededed); --ro-muted: var(--dsw-alias-label-secondary, #a2a2a2); --ro-dim: var(--dsw-alias-label-tertiary, #707070); --ro-accent: var(--dsw-alias-brand-primary, #4da1ff); --ro-danger: var(--dsw-alias-state-error-primary, #ee7d87); --ro-success: var(--dsw-alias-state-success-primary, #69cf97); color: var(--ro-text); }
+  .remoteOps { --ro-bg: var(--dsw-alias-bg-module-platform, #fff); --ro-panel: var(--dsw-alias-bg-layer-2, #f7f7f7); --ro-panel-2: var(--dsw-alias-bg-layer-3, #ededed); --ro-line: var(--dsw-alias-border-l2, #dedede); --ro-text: var(--dsw-alias-label-primary, #202020); --ro-muted: var(--dsw-alias-label-secondary, #666); --ro-dim: var(--dsw-alias-label-tertiary, #888); --ro-accent: var(--dsw-alias-brand-primary, #4d6bfe); --ro-danger: var(--dsw-alias-state-error-primary, #d54941); --ro-success: var(--dsw-alias-state-success-primary, #1f9d61); color: var(--ro-text); }
   .remoteOps * , .remoteWorkspace * { box-sizing: border-box; }
   .remoteWorkspace { background: var(--ro-bg); border-left: 1px solid var(--ro-line); color-scheme: light dark; display: flex; flex-direction: column; height: 100vh; inset: 0 0 0 var(--ro-workspace-left, 50vw); min-width: 300px; position: fixed; z-index: 21; }
   .remoteWorkspace__head { align-items: center; background: var(--ro-bg); border-bottom: 1px solid var(--ro-line); display: flex; height: 44px; justify-content: space-between; padding: 0 12px 0 16px; }
@@ -9,6 +9,9 @@ export const CSS = `
   .remoteWorkspace__address { color: var(--ro-muted); font: 12px ui-monospace, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .remoteWorkspace__statusDot { background: var(--ro-success); border-radius: 50%; height: 7px; width: 7px; }
   .remoteWorkspace__button { align-items: center; appearance: none; background: transparent; border: 1px solid var(--ro-line); border-radius: 6px; color: var(--ro-muted); cursor: pointer; display: inline-flex; font: inherit; font-size: 12px; gap: 6px; height: 30px; justify-content: center; padding: 0 9px; }
+  .remoteWorkspace__launcherButton, .remoteWorkspace__headButton { height: 30px; }
+  .remoteWorkspace__saveButton { min-width: 74px; }
+  .remoteWorkspace__port, .remoteOps__port { min-width: 0; }
   .remoteWorkspace__button:hover:not(:disabled), .remoteWorkspace__button[data-active='true'] { background: var(--ro-panel-2); color: var(--ro-text); }
   .remoteWorkspace__button:disabled { cursor: default; opacity: .45; }
   .remoteWorkspace__workspace { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr) 5px var(--ro-explorer-width, 320px); min-height: 0; }
@@ -64,7 +67,7 @@ export const CSS = `
   .remoteWorkspace__serverOption { background: transparent; border: 0; color: var(--ro-muted); cursor: pointer; display: flex; justify-content: space-between; padding: 9px; text-align: left; width: 100%; }
   .remoteWorkspace__serverOption:hover { background: var(--ro-panel-2); color: var(--ro-text); }
   .remoteWorkspace__serverStatus { color: var(--ro-dim); font-size: 11px; }
-  @media (max-width: 1100px) { .remoteWorkspace { inset: 0 0 0 max(var(--dsw-sidebar-width, 280px), var(--ro-workspace-left, 50vw)); } .remoteWorkspace__workspace { grid-template-columns: minmax(0, 1fr) 5px minmax(220px, var(--ro-explorer-width, 250px)); } }
+  @media (max-width: 1100px) { .remoteWorkspace { inset: 0 0 0 max(280px, var(--ro-workspace-left, 50vw)); } .remoteWorkspace__workspace { grid-template-columns: minmax(0, 1fr) 5px minmax(220px, var(--ro-explorer-width, 250px)); } }
   @media (max-width: 760px) { .remoteWorkspace { inset: 0; } }
   @media (max-width: 620px) { .remoteWorkspace__explorer { display: none; } .remoteWorkspace__changePreview { grid-template-columns: 1fr; } }
   .remoteOps { display: flex; flex-direction: column; gap: 20px; max-width: 920px; padding: 4px 0 30px; }
@@ -118,7 +121,7 @@ export const CSS = `
   .remoteOps__jobRow strong { color: var(--ro-text); font-size: 12px; }
   .remoteOps__jobRow small { color: var(--ro-dim); font: 10px ui-monospace, Consolas, monospace; }
   .remoteOps__jobStatus { border-radius: 999px; flex: none; font-size: 10px; margin-left: 12px; padding: 3px 7px; }
-  .remoteOps__jobStatus--running { background: var(--dsw-alias-state-business-secondary, var(--ro-panel-2)); color: var(--ro-accent); }
+  .remoteOps__jobStatus--running { background: var(--dsw-alias-state-business-tertiary, var(--ro-panel-2)); color: var(--ro-accent); }
   .remoteOps__jobStatus--succeeded { color: var(--ro-success); }
   .remoteOps__jobStatus--failed, .remoteOps__jobStatus--timed_out { color: var(--ro-danger); }
   .remoteOps__jobDetail { border-top: 1px solid var(--ro-line); padding: 10px 12px 12px; }
@@ -127,6 +130,8 @@ export const CSS = `
   .remoteOps__jobDetail dd { color: var(--ro-muted); font-size: 11px; margin: 2px 0 0; }
   .remoteOps__jobLog { background: #111; border: 1px solid var(--ro-line); color: #ccc; font: 11px/1.5 ui-monospace, Consolas, monospace; margin: 0; max-height: 180px; overflow: auto; padding: 10px; white-space: pre-wrap; }
   .remoteOps__cancel { color: var(--ro-danger); margin: 0 12px 10px; }
+  .remoteOps__danger { background: transparent; border: 1px solid transparent; color: var(--ro-danger); cursor: pointer; font-size: 12px; min-height: 30px; padding: 0 8px; }
+  .remoteOps__danger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-danger, rgba(213, 73, 65, .08)); }
   .remoteOps__empty { align-items: center; border: 1px dashed var(--ro-line); color: var(--ro-muted); display: flex; justify-content: center; min-height: 74px; padding: 14px; }
   @media (max-width: 620px) { .remoteOps__overview { grid-template-columns: 1fr; } .remoteOps__overview div + div { border-left: 0; border-top: 1px solid var(--ro-line); } .remoteOps__connectForm { grid-template-columns: 1fr; } .remoteOps__wideInput { grid-column: auto; } .remoteOps__facts { grid-template-columns: 1fr 1fr; } .remoteOps__factWide { grid-column: 1 / -1; } }
 `
