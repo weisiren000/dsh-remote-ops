@@ -110,6 +110,30 @@ window.__ModuleLoader__.load({
         .remoteOps__jobExit { display: none; }
       }
       @media (prefers-reduced-motion: reduce) { .remoteOps__host { transition: none; } }
+      .remoteWorkspace { background: var(--dsw-alias-bg-base); border-left: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-primary); display: flex; flex-direction: column; height: 100vh; position: fixed; right: 0; top: 0; width: min(720px, 92vw); z-index: 1000; box-shadow: -8px 0 24px rgba(0,0,0,.12); }
+      .remoteWorkspace__head, .remoteWorkspace__toolbar { align-items: center; display: flex; gap: 8px; padding: 10px 14px; }
+      .remoteWorkspace__head { border-bottom: 1px solid var(--dsw-alias-border-l2); justify-content: space-between; }
+      .remoteWorkspace__title { font-size: 14px; font-weight: 600; }
+      .remoteWorkspace__toolbar { border-bottom: 1px solid var(--dsw-alias-border-l1); }
+      .remoteWorkspace__select, .remoteWorkspace__input { background: var(--dsw-alias-bg-layer-3); border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; color: inherit; height: 30px; min-width: 0; padding: 0 8px; }
+      .remoteWorkspace__select { flex: 1; }
+      .remoteWorkspace__tabs { display: flex; gap: 4px; padding: 8px 14px 0; }
+      .remoteWorkspace__tab, .remoteWorkspace__button { background: transparent; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; color: var(--dsw-alias-label-secondary); cursor: pointer; font: inherit; font-size: 12px; min-height: 30px; padding: 0 9px; }
+      .remoteWorkspace__tab[data-active='true'] { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); }
+      .remoteWorkspace__body { display: grid; flex: 1; grid-template-columns: 210px minmax(0, 1fr); min-height: 0; }
+      .remoteWorkspace__files { border-right: 1px solid var(--dsw-alias-border-l2); min-width: 0; overflow: auto; padding: 10px; }
+      .remoteWorkspace__entry { background: transparent; border: 0; color: var(--dsw-alias-label-secondary); cursor: pointer; display: block; font: inherit; font-size: 12px; overflow: hidden; padding: 6px; text-align: left; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
+      .remoteWorkspace__entry:hover, .remoteWorkspace__entry[data-active='true'] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+      .remoteWorkspace__editor, .remoteWorkspace__terminal, .remoteWorkspace__changes { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 10px; }
+      .remoteWorkspace__editor textarea { background: var(--dsw-alias-bg-layer-3); border: 1px solid var(--dsw-alias-border-l2); color: inherit; flex: 1; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; min-height: 0; padding: 10px; resize: none; }
+      .remoteWorkspace__editorbar, .remoteWorkspace__terminalbar { align-items: center; display: flex; gap: 8px; justify-content: space-between; margin-bottom: 8px; }
+      .remoteWorkspace__muted { color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+      .remoteWorkspace__output { background: #101214; color: #d5d9df; flex: 1; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; margin: 0 0 8px; min-height: 0; overflow: auto; padding: 10px; white-space: pre-wrap; }
+      .remoteWorkspace__terminalbar .remoteWorkspace__input { flex: 1; }
+      .remoteWorkspace__change { border-bottom: 1px solid var(--dsw-alias-border-l1); display: flex; gap: 8px; justify-content: space-between; padding: 9px 0; }
+      .remoteWorkspace__changeActions { display: flex; gap: 4px; }
+      .remoteWorkspace__error { color: var(--dsw-alias-state-error-primary); font-size: 12px; padding: 8px 14px; }
+      @media (max-width: 680px) { .remoteWorkspace { width: 100vw; } .remoteWorkspace__body { grid-template-columns: 150px minmax(0,1fr); } }
     `
 
     async function parse(response) {
@@ -179,6 +203,12 @@ window.__ModuleLoader__.load({
         },
         cancel: (jobId) => fetch(`${PREFIX}/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }).then(parse),
         log: (jobId, tail = 200) => fetch(`${PREFIX}/jobs/${encodeURIComponent(jobId)}/log?tail=${encodeURIComponent(tail)}`).then(parse),
+        files: (hostId, remotePath) => fetch(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/files${remotePath ? `?path=${encodeURIComponent(remotePath)}` : ''}`).then(parse),
+        file: (hostId, remotePath) => fetch(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/file?path=${encodeURIComponent(remotePath)}`).then(parse),
+        saveFile: (hostId, input) => fetch(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/file`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: input.path, content: input.content, expected_version: input.expectedVersion, source: input.source, description: input.description }) }).then(parse),
+        terminal: (hostId, input) => fetch(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/terminal`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ command: input.command, workdir: input.workdir, timeout_ms: input.timeoutMs, description: input.description }) }).then(parse),
+        changes: (hostId) => fetch(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/changes?status=pending`).then(parse),
+        review: (changeId, action) => fetch(`${PREFIX}/changes/${encodeURIComponent(changeId)}/${action}`, { method: 'POST' }).then(parse),
       }
     }
 
@@ -249,6 +279,74 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'remoteOps__empty' },
         h('span', { className: 'remoteOps__emptyTitle' }, title),
         h('span', { className: 'remoteOps__emptyText' }, text),
+      )
+    }
+
+    function RemoteWorkspaceAction() {
+      const client = createApi()
+      const [open, setOpen] = useState(false)
+      const [hosts, setHosts] = useState([])
+      const [hostId, setHostId] = useState('')
+      const [pathValue, setPathValue] = useState('.')
+      const [entries, setEntries] = useState([])
+      const [file, setFile] = useState(null)
+      const [content, setContent] = useState('')
+      const [tab, setTab] = useState('files')
+      const [command, setCommand] = useState('')
+      const [output, setOutput] = useState('')
+      const [changes, setChanges] = useState([])
+      const [error, setError] = useState(null)
+      const loadHosts = async () => {
+        const result = await client.list()
+        const next = result.hosts ?? []
+        setHosts(next)
+        setHostId((current) => current || result.current_host_id || next[0]?.host_id || '')
+      }
+      const loadFiles = async (id = hostId, directory = pathValue) => {
+        if (!id) return
+        const result = await client.files(id, directory)
+        setEntries(result.entries ?? [])
+      }
+      const loadChanges = async (id = hostId) => {
+        if (!id) return
+        const result = await client.changes(id)
+        setChanges(result.changes ?? [])
+      }
+      useEffect(() => { if (!open) return undefined; loadHosts().catch((err) => setError(err.message)); const timer = setInterval(() => loadHosts().catch(() => {}), 5000); return () => clearInterval(timer) }, [open])
+      useEffect(() => { if (!open || !hostId) return undefined; setError(null); loadFiles().catch((err) => setError(err.message)); loadChanges().catch((err) => setError(err.message)); return undefined }, [open, hostId, pathValue])
+      const openEntry = async (entry) => {
+        if (entry.type === 'directory') { setPathValue(entry.path); setFile(null); return }
+        try { const result = await client.file(hostId, entry.path); setFile(result); setContent(result.content ?? ''); setTab('files'); setError(null) } catch (err) { setError(err.message) }
+      }
+      const save = async () => {
+        if (!file) return
+        try { const result = await client.saveFile(hostId, { path: file.path, content, expectedVersion: file.version, source: 'manual', description: '远程工作台保存' }); setFile((current) => ({ ...current, version: result.after_version })); setContent(content); await loadFiles(); await loadChanges(); setError(null) } catch (err) { setError(err.message) }
+      }
+      const run = async () => {
+        if (!command.trim()) return
+        try { const result = await client.terminal(hostId, { command, workdir: pathValue, description: '远程工作台终端' }); setOutput((current) => `${current}${current ? '\n' : ''}$ ${command}\n${result.log ?? result.stdout ?? result.error ?? ''}`); setCommand(''); setError(null) } catch (err) { setError(err.message) }
+      }
+      const review = async (changeId, action) => { try { await client.review(changeId, action); await loadChanges(); setError(null) } catch (err) { setError(err.message) } }
+      return h('span', null,
+        h('button', { type: 'button', className: 'remoteWorkspace__button', title: '远程开发工作台', 'aria-label': '远程开发工作台', onClick: () => setOpen(true) }, '服务器'),
+        open ? h('aside', { className: 'remoteWorkspace', role: 'dialog', 'aria-label': '远程开发工作台' },
+          h('div', { className: 'remoteWorkspace__head' }, h('span', { className: 'remoteWorkspace__title' }, '远程开发'), h('button', { className: 'remoteWorkspace__button', type: 'button', onClick: () => setOpen(false), 'aria-label': '关闭工作台' }, '关闭')),
+          h('div', { className: 'remoteWorkspace__toolbar' }, h('select', { className: 'remoteWorkspace__select', value: hostId, onChange: (event) => { setHostId(event.target.value); setFile(null) }, 'aria-label': '服务器' }, hosts.map((host) => h('option', { key: host.host_id, value: host.host_id }, host.display_name || host.host_id))), h('button', { className: 'remoteWorkspace__button', type: 'button', onClick: () => loadHosts().catch((err) => setError(err.message)) }, '刷新')),
+          error ? h('div', { className: 'remoteWorkspace__error', role: 'alert' }, error) : null,
+          h('div', { className: 'remoteWorkspace__tabs' }, ['files', 'terminal', 'changes'].map((value) => h('button', { key: value, className: 'remoteWorkspace__tab', type: 'button', 'data-active': String(tab === value), onClick: () => { setTab(value); if (value === 'changes') loadChanges().catch(() => {}) } }, value === 'files' ? '文件' : value === 'terminal' ? '终端' : '变更'))),
+          tab === 'files' ? h('div', { className: 'remoteWorkspace__body' },
+            h('div', { className: 'remoteWorkspace__files' },
+              h('button', { className: 'remoteWorkspace__entry', type: 'button', onClick: () => { setPathValue('.'); setFile(null) } }, `目录：${pathValue}`),
+              ...entries.map((entry) => h('button', { key: entry.path, className: 'remoteWorkspace__entry', type: 'button', 'data-active': String(file?.path === entry.path), onClick: () => openEntry(entry) }, `${entry.type === 'directory' ? '▸' : '·'} ${entry.name}`)),
+            ),
+            h('div', { className: 'remoteWorkspace__editor' },
+              h('div', { className: 'remoteWorkspace__editorbar' }, h('span', { className: 'remoteWorkspace__muted' }, file?.path || '选择文件后编辑'), file ? h('button', { className: 'remoteWorkspace__button', type: 'button', onClick: save }, '保存') : null),
+              file ? h('textarea', { value: content, onChange: (event) => setContent(event.target.value), spellCheck: false }) : h('div', { className: 'remoteWorkspace__muted' }, '从左侧选择文本文件'),
+            ),
+          ) : null,
+          tab === 'terminal' ? h('div', { className: 'remoteWorkspace__terminal' }, h('pre', { className: 'remoteWorkspace__output' }, output || '终端输出'), h('div', { className: 'remoteWorkspace__terminalbar' }, h('input', { className: 'remoteWorkspace__input', value: command, placeholder: '输入远程命令', onChange: (event) => setCommand(event.target.value), onKeyDown: (event) => { if (event.key === 'Enter') run() } }), h('button', { className: 'remoteWorkspace__button', type: 'button', onClick: run }, '执行'))) : null,
+          tab === 'changes' ? h('div', { className: 'remoteWorkspace__changes' }, changes.length ? changes.map((change) => h('div', { className: 'remoteWorkspace__change', key: change.change_id }, h('span', { className: 'remoteWorkspace__muted', title: change.path }, change.path), h('span', { className: 'remoteWorkspace__changeActions' }, h('button', { className: 'remoteWorkspace__button', type: 'button', onClick: () => review(change.change_id, 'accept') }, '接受'), h('button', { className: 'remoteWorkspace__button', type: 'button', onClick: () => review(change.change_id, 'revert') }, '撤销')))) : h('div', { className: 'remoteWorkspace__muted' }, '暂无待审阅变更')) : null,
+        ) : null,
       )
     }
 
@@ -582,6 +680,13 @@ window.__ModuleLoader__.load({
           order: 40,
           label: () => '远程主机',
         }, RemoteHostsTab))
+        ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+          name: 'conversation.session.header.actions',
+          id: 'remote-workspace',
+          order: 12,
+          label: () => '远程工作台',
+          tooltip: () => '打开远程工作台',
+        }, RemoteWorkspaceAction))
       },
     }
   },

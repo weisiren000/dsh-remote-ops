@@ -1,12 +1,62 @@
 import { createServer as createHttpServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import path from 'node:path'
 import { createHostState } from './state.js'
 import { resolveDialect, runCommand } from '../executor.js'
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost'])
+const MAX_REMOTE_FILE_BYTES = 10 * 1024 * 1024
+
+function codedError(code, message, status = 400, details = {}) {
+  const error = new Error(message)
+  error.code = code
+  error.status = status
+  Object.assign(error, details)
+  return error
+}
+
+function resolveWorkspacePath(root, requestedPath) {
+  const value = String(requestedPath ?? '').trim()
+  if (!value || value.includes('\0')) throw codedError('REMOTE_PATH_INVALID', '文件路径无效')
+  const resolvedRoot = path.resolve(root)
+  const resolved = path.resolve(resolvedRoot, value)
+  if (resolved !== resolvedRoot && !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw codedError('REMOTE_PATH_OUTSIDE_WORKSPACE', '文件路径超出 hostd 工作目录', 403)
+  }
+  return resolved
+}
+
+function contentVersion(content) {
+  return createHash('sha256').update(content).digest('hex')
+}
+
+async function readWorkspaceFile(root, requestedPath) {
+  const filePath = resolveWorkspacePath(root, requestedPath)
+  const attrs = await stat(filePath)
+  if (attrs.size > MAX_REMOTE_FILE_BYTES) {
+    throw codedError('REMOTE_FILE_TOO_LARGE', `远程文件超过 ${MAX_REMOTE_FILE_BYTES} 字节限制`, 413)
+  }
+  const content = await readFile(filePath)
+  return {
+    path: requestedPath,
+    content: content.toString('utf8'),
+    size: attrs.size,
+    mtime: attrs.mtimeMs,
+    version: contentVersion(content),
+  }
+}
+
+async function currentWorkspaceVersion(root, requestedPath) {
+  try {
+    return (await readWorkspaceFile(root, requestedPath)).version
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+}
 
 export function parseListen(listen) {
   const value = listen ?? '127.0.0.1:7680'
@@ -50,6 +100,12 @@ function routeKey(method, pathname) {
   return `${method} ${pathname}`
 }
 
+function fileRoute(method, pathname) {
+  if (method === 'GET' && pathname === '/v1/files') return true
+  if (method === 'GET' && pathname === '/v1/file') return true
+  return (method === 'PUT' || method === 'DELETE') && pathname === '/v1/file'
+}
+
 function execCancelMatch(pathname) {
   const match = /^\/v1\/exec\/([^/]+)\/cancel$/.exec(pathname)
   return match ? decodeURIComponent(match[1]) : null
@@ -79,6 +135,7 @@ export async function startHostd(options = {}) {
   const issued = state.issuePairingCode()
   const jobs = new Map()
   const dialect = resolveDialect()
+  const workspaceRoot = path.resolve(options.workspaceRoot ?? process.cwd())
 
   const handlePair = async (req, res) => {
     const body = await readJsonBody(req)
@@ -89,7 +146,7 @@ export async function startHostd(options = {}) {
         device_token: paired.deviceToken,
         hostname: paired.hostname,
         dialect: paired.dialect,
-        cwd: paired.cwd,
+        cwd: workspaceRoot,
       })
     } catch {
       json(res, 401, { error: 'pairing failed' })
@@ -107,7 +164,7 @@ export async function startHostd(options = {}) {
       host_id: state.hostId,
       hostname: os.hostname(),
       dialect,
-      cwd: process.cwd(),
+      cwd: workspaceRoot,
       ts: Date.now(),
     })
   }
@@ -144,6 +201,69 @@ export async function startHostd(options = {}) {
     json(res, 200, { ok: true })
   }
 
+  const handleFiles = async (url, res) => {
+    const requestedPath = url.searchParams.get('path') || workspaceRoot
+    const directory = resolveWorkspacePath(workspaceRoot, requestedPath)
+    const rows = await readdir(directory, { withFileTypes: true })
+    const entries = await Promise.all(rows.map(async (entry) => {
+      const entryPath = path.join(directory, entry.name)
+      const attrs = await stat(entryPath)
+      return {
+        name: entry.name,
+        path: entryPath,
+        type: entry.isDirectory() ? 'directory' : 'file',
+        size: attrs.size,
+        mtime: attrs.mtimeMs,
+        mode: attrs.mode,
+      }
+    }))
+    json(res, 200, { host_id: state.hostId, path: directory, entries })
+  }
+
+  const handleReadFile = async (url, res) => {
+    const requestedPath = url.searchParams.get('path')
+    json(res, 200, { host_id: state.hostId, ...(await readWorkspaceFile(workspaceRoot, requestedPath)) })
+  }
+
+  const handleWriteFile = async (req, res) => {
+    const body = await readJsonBody(req)
+    const filePath = resolveWorkspacePath(workspaceRoot, body.path)
+    const content = Buffer.from(String(body.content ?? ''), 'utf8')
+    if (content.length > MAX_REMOTE_FILE_BYTES) {
+      throw codedError('REMOTE_FILE_TOO_LARGE', `远程文件超过 ${MAX_REMOTE_FILE_BYTES} 字节限制`, 413)
+    }
+    const currentVersion = await currentWorkspaceVersion(workspaceRoot, body.path)
+    if (body.expected_version !== undefined && body.expected_version !== currentVersion) {
+      throw codedError('REMOTE_FILE_CONFLICT', '远程文件已发生变化', 409, {
+        expectedVersion: body.expected_version,
+        currentVersion,
+      })
+    }
+    await mkdir(path.dirname(filePath), { recursive: true })
+    const temporaryPath = `${filePath}.dsh-tmp-${randomUUID()}`
+    try {
+      await writeFile(temporaryPath, content, { mode: 0o600 })
+      await rename(temporaryPath, filePath)
+    } finally {
+      await unlink(temporaryPath).catch(() => {})
+    }
+    json(res, 200, { path: filePath, size: content.length, version: contentVersion(content) })
+  }
+
+  const handleDeleteFile = async (req, res) => {
+    const body = await readJsonBody(req)
+    const filePath = resolveWorkspacePath(workspaceRoot, body.path)
+    const currentVersion = await currentWorkspaceVersion(workspaceRoot, body.path)
+    if (body.expected_version !== undefined && body.expected_version !== currentVersion) {
+      throw codedError('REMOTE_FILE_CONFLICT', '远程文件已发生变化', 409, {
+        expectedVersion: body.expected_version,
+        currentVersion,
+      })
+    }
+    await unlink(filePath)
+    json(res, 200, { path: filePath, deleted: true })
+  }
+
   const listener = async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', 'http://hostd.local')
@@ -165,9 +285,22 @@ export async function startHostd(options = {}) {
         if (requireAuth(req, res)) handleCancel(cancelId, res)
         return
       }
+      if (fileRoute(req.method ?? 'GET', url.pathname)) {
+        if (!requireAuth(req, res)) return
+        if (key === 'GET /v1/files') await handleFiles(url, res)
+        if (key === 'GET /v1/file') await handleReadFile(url, res)
+        if (key === 'PUT /v1/file') await handleWriteFile(req, res)
+        if (key === 'DELETE /v1/file') await handleDeleteFile(req, res)
+        return
+      }
       json(res, 404, { error: 'not found' })
     } catch (error) {
-      json(res, 400, { error: error instanceof Error ? error.message : 'bad request' })
+      json(res, error?.status ?? 400, {
+        error: error instanceof Error ? error.message : 'bad request',
+        code: error?.code ?? 'HOSTD_ERROR',
+        ...(error?.currentVersion !== undefined ? { current_version: error.currentVersion } : {}),
+        ...(error?.expectedVersion !== undefined ? { expected_version: error.expectedVersion } : {}),
+      })
     }
   }
 

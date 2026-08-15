@@ -1,4 +1,5 @@
 import { resolveTarget } from './resolve.js'
+import { createHash } from 'node:crypto'
 
 function jobStatus(result) {
   if (result.timedOut) return 'timed_out'
@@ -31,6 +32,33 @@ function taskStats(store, hostId) {
   }
   for (const job of store.listJobs({ hostId })) counts[job.status] += 1
   return counts
+}
+
+function isRemoteFileMissing(error) {
+  const code = error?.cause?.code ?? error?.code
+  return code === 2 || code === 'ENOENT' || /no such file|not found/i.test(error?.message ?? '')
+}
+
+function changeActionStatus(action) {
+  if (action === 'accept' || action === 'accepted') return 'accepted'
+  if (action === 'undo' || action === 'revert' || action === 'reverted') return 'reverted'
+  if (action === 'restore' || action === 'restored') return 'restored'
+  const error = new Error(`unsupported change action: ${action}`)
+  error.code = 'CHANGE_ACTION_INVALID'
+  throw error
+}
+
+function contentVersion(content) {
+  if (content === null || content === undefined) return null
+  return createHash('sha256').update(String(content), 'utf8').digest('hex')
+}
+
+function conflictError(expectedVersion, currentVersion) {
+  const error = new Error('远程文件已被其他操作修改，请重新加载后再保存')
+  error.code = 'REMOTE_FILE_CONFLICT'
+  error.expectedVersion = expectedVersion
+  error.currentVersion = currentVersion
+  return error
 }
 
 async function refreshHost(store, client, host, options = {}) {
@@ -323,6 +351,101 @@ export function createRunner({ store, client, now = Date.now }) {
         dialect: host.dialect,
         taskStats: taskStats(store, hostId),
       }
+    },
+    async listFiles(hostRef, remotePath) {
+      const target = resolveTarget(store, hostRef)
+      const entries = await client.listDirectory(target, remotePath || target.cwd || '.')
+      return { hostId: target.hostId, path: remotePath || target.cwd || '.', entries }
+    },
+    async readRemoteFile(hostRef, remotePath) {
+      const target = resolveTarget(store, hostRef)
+      const result = await client.readRemoteFile(target, remotePath)
+      return { hostId: target.hostId, ...result, version: result.version ?? contentVersion(result.content) }
+    },
+    async writeRemoteFile(input) {
+      const target = resolveTarget(store, input.host)
+      let beforeContent = input.beforeContent
+      let beforeVersion = null
+      if (beforeContent === undefined) {
+        try {
+          const before = await client.readRemoteFile(target, input.path)
+          beforeContent = before.content
+          beforeVersion = before.version ?? contentVersion(before.content)
+        } catch (error) {
+          if (!isRemoteFileMissing(error)) throw error
+          beforeContent = null
+        }
+      } else {
+        beforeVersion = contentVersion(beforeContent)
+      }
+      if (input.expectedVersion !== undefined && input.expectedVersion !== beforeVersion) {
+        throw conflictError(input.expectedVersion, beforeVersion)
+      }
+      const write = await client.writeRemoteFile(target, input.path, input.content, beforeVersion)
+      const afterVersion = write.version ?? contentVersion(input.content)
+      const change = await store.recordChange({
+        hostId: target.hostId,
+        path: input.path,
+        beforeContent,
+        afterContent: String(input.content ?? ''),
+        beforeVersion,
+        afterVersion,
+        source: input.source ?? 'manual',
+        description: input.description,
+      })
+      return { ...change, write }
+    },
+    async deleteRemoteFile(input) {
+      const target = resolveTarget(store, input.host)
+      const before = await client.readRemoteFile(target, input.path)
+      const beforeVersion = before.version ?? contentVersion(before.content)
+      if (input.expectedVersion !== undefined && input.expectedVersion !== beforeVersion) {
+        throw conflictError(input.expectedVersion, beforeVersion)
+      }
+      const result = await client.deleteRemoteFile(target, input.path, beforeVersion)
+      const change = await store.recordChange({
+        hostId: target.hostId,
+        path: input.path,
+        beforeContent: before.content,
+        afterContent: '',
+        beforeVersion,
+        afterVersion: null,
+        source: input.source ?? 'manual',
+        description: input.description,
+      })
+      return { ...change, delete: result }
+    },
+    listChanges(filter = {}) {
+      return store.listChanges(filter)
+    },
+    async readChange(changeId) {
+      const change = store.getChange(changeId)
+      if (!change) {
+        const error = new Error(`change not found: ${changeId}`)
+        error.code = 'CHANGE_NOT_FOUND'
+        throw error
+      }
+      return change
+    },
+    async reviewChange(changeId, action) {
+      const change = await this.readChange(changeId)
+      const status = changeActionStatus(action)
+      if (status === 'accepted') return store.updateChange(changeId, { status })
+      const target = resolveTarget(store, change.hostId)
+      const content = status === 'restored' ? change.afterContent : change.beforeContent
+      const current = await client.readRemoteFile(target, change.path).catch((error) => {
+        if (isRemoteFileMissing(error)) return { content: null, version: null }
+        throw error
+      })
+      const currentVersion = current.version ?? contentVersion(current.content)
+      const expectedVersion = status === 'restored' ? change.beforeVersion : change.afterVersion
+      if (expectedVersion !== currentVersion) throw conflictError(expectedVersion, currentVersion)
+      if (content === null || content === undefined) {
+        await client.deleteRemoteFile(target, change.path)
+      } else {
+        await client.writeRemoteFile(target, change.path, content, currentVersion)
+      }
+      return store.updateChange(changeId, { status })
     },
     listJobs(filter) {
       return store.listJobs(filter)

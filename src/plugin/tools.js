@@ -334,4 +334,83 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
       }
     },
   })
+  register({
+    name: 'host_list_files',
+    description: 'List files and directories on a paired remote host.',
+    parameters: {
+      host: { type: 'string', description: 'Host id or unique display name.' },
+      path: { type: 'string', description: 'Remote directory path.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: false, properties: { host_id: { type: 'string', required: true }, path: { type: 'string', required: true }, entries: { type: 'array', required: true } } }, render: renderJson },
+    async execute(args) {
+      try {
+        const host = await requireHost(runner, args.host)
+        return runner.listFiles(host, args.path)
+      } catch (error) {
+        toolError(error)
+      }
+    },
+  })
+  register({
+    name: 'host_read_file',
+    description: 'Read a UTF-8 text file from a paired remote host.',
+    parameters: {
+      host: { type: 'string', description: 'Host id or unique display name.' },
+      path: { type: 'string', required: true, description: 'Remote file path.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: false, properties: { host_id: { type: 'string', required: true }, path: { type: 'string', required: true }, content: { type: 'string', required: true }, version: { type: 'string', required: true } } }, render: renderJson },
+    async execute(args) {
+      try {
+        const host = await requireHost(runner, args.host)
+        return runner.readRemoteFile(host, args.path)
+      } catch (error) {
+        toolError(error)
+      }
+    },
+  })
+  register({
+    name: 'host_write_file',
+    description: 'Write a complete UTF-8 text file on a paired remote host and create a reviewable change record.',
+    parameters: {
+      host: { type: 'string', description: 'Host id or unique display name.' },
+      path: { type: 'string', required: true, description: 'Remote file path.' },
+      content: { type: 'string', required: true, description: 'Complete replacement file content.' },
+      expected_version: { type: 'string', description: 'Version returned by host_read_file.' },
+      description: { type: 'string', description: 'Reason for the change.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: false }, render: renderJson },
+    async execute(args) {
+      try {
+        const host = await requireHost(runner, args.host)
+        return runner.writeRemoteFile({ host, path: args.path, content: args.content, expectedVersion: args.expected_version, source: 'ai', description: args.description })
+      } catch (error) {
+        toolError(error)
+      }
+    },
+  })
+  register({
+    name: 'host_review_changes',
+    description: 'List remote file changes or apply an accept, revert, or restore review action.',
+    parameters: {
+      host: { type: 'string', description: 'Host id or unique display name.' },
+      change_id: { type: 'string', description: 'Change id to review.' },
+      action: { type: 'string', enum: ['accept', 'revert', 'restore'], description: 'Review action used with change_id.' },
+      status: { type: 'string', enum: ['pending', 'accepted', 'reverted', 'restored'], description: 'Change status filter.' },
+      limit: { type: 'integer', description: 'Maximum number of changes.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: false }, render: renderJson },
+    async execute(args) {
+      try {
+        if (args.change_id) {
+          if (!args.action) throw codedError('CHANGE_ACTION_REQUIRED', 'action required when change_id is provided')
+          return runner.reviewChange(args.change_id, args.action)
+        }
+        const host = await requireHost(runner, args.host)
+        const changes = runner.listChanges({ hostId: host, status: args.status, limit: args.limit })
+        return { host_id: host, changes }
+      } catch (error) {
+        toolError(error)
+      }
+    },
+  })
 }

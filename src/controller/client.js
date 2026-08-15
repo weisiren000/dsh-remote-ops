@@ -50,7 +50,11 @@ async function request(url, init) {
       body.code ?? 'REMOTE_HTTP',
       body.error ?? `http ${response.status}`,
       undefined,
-      body.fingerprint ? { fingerprint: body.fingerprint } : {},
+      {
+        ...(body.fingerprint ? { fingerprint: body.fingerprint } : {}),
+        ...(body.current_version !== undefined ? { currentVersion: body.current_version } : {}),
+        ...(body.expected_version !== undefined ? { expectedVersion: body.expected_version } : {}),
+      },
     )
   }
   return body
@@ -127,6 +131,40 @@ export function createHostClient(options = {}) {
         timedOut: body.timed_out,
         aborted: body.aborted,
       }
+    },
+    async listDirectory(host, remotePath) {
+      if (host.transport === 'ssh') return ssh.listDirectory(host, remotePath)
+      const url = assertAddress(host.address)
+      const query = new URLSearchParams({ path: remotePath || host.cwd || '.' })
+      const body = await request(new URL(`/v1/files?${query}`, url), { headers: authHeaders(host) })
+      return body.entries ?? body
+    },
+    async readRemoteFile(host, remotePath) {
+      if (host.transport === 'ssh') return ssh.readRemoteFile(host, remotePath)
+      const url = assertAddress(host.address)
+      const query = new URLSearchParams({ path: remotePath })
+      return request(new URL(`/v1/file?${query}`, url), { headers: authHeaders(host) })
+    },
+    async writeRemoteFile(host, remotePath, content, expectedVersion) {
+      if (host.transport === 'ssh') return ssh.writeRemoteFile(host, remotePath, content, expectedVersion)
+      const url = assertAddress(host.address)
+      return request(new URL('/v1/file', url), {
+        method: 'PUT',
+        headers: authHeaders(host, { 'content-type': 'application/json' }),
+        body: JSON.stringify({ path: remotePath, content, expected_version: expectedVersion }),
+      })
+    },
+    async deleteRemoteFile(host, remotePath, expectedVersion) {
+      if (host.transport === 'ssh') return ssh.deleteRemoteFile(host, remotePath, expectedVersion)
+      const url = assertAddress(host.address)
+      return request(new URL('/v1/file', url), {
+        method: 'DELETE',
+        headers: authHeaders(host, { 'content-type': 'application/json' }),
+        body: JSON.stringify({ path: remotePath, expected_version: expectedVersion }),
+      })
+    },
+    async terminal(host, spec) {
+      return this.exec(host, spec)
     },
     async cancel(host, remoteJobId) {
       if (host.transport === 'ssh') return ssh.cancel(host, remoteJobId)

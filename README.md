@@ -45,6 +45,8 @@ cmd /c mklink /J "$env:USERPROFILE\.dsh\plugins\dsh-remote-ops" "D:\codee\dsh\ds
 
 在对话里让模型调用 `host_pair` 效果相同，两边读写同一份本机主机表。
 
+会话标题栏的“服务器”入口提供远程开发工作台：可以浏览和编辑远程文本文件、运行终端命令，并审阅插件或 AI 产生的待处理文件变更。保存使用文件版本校验，发现远端文件被其他人修改时会拒绝覆盖。
+
 ## 模型工具
 
 - `host_pair`：地址 + 暗号
@@ -52,3 +54,6 @@ cmd /c mklink /J "$env:USERPROFILE\.dsh\plugins\dsh-remote-ops" "D:\codee\dsh\ds
 - `host_use`：切换当前目标
 - `host_bash`：在当前目标或指定主机执行命令
 - `host_jobs` / `host_job_log`：查任务和日志
+- `host_list_files` / `host_read_file`：浏览和读取远程文件
+- `host_write_file`：以版本校验写入完整文件，并留下待审阅变更
+- `host_review_changes`：查询待审阅的远程文件变更

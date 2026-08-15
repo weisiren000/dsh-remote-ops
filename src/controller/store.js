@@ -12,6 +12,8 @@ const JOB_STATUSES = new Set([
   'interrupted',
 ])
 
+const CHANGE_STATUSES = new Set(['pending', 'accepted', 'reverted', 'restored'])
+
 function publicHost(host) {
   const {
     deviceToken: _deviceToken,
@@ -94,6 +96,40 @@ function fromPersistedJob(payload) {
   }
 }
 
+function toPersistedChange(change) {
+  return {
+    change_id: change.changeId,
+    host_id: change.hostId,
+    path: change.path,
+    before_content: change.beforeContent ?? null,
+    after_content: change.afterContent ?? '',
+    before_version: change.beforeVersion ?? null,
+    after_version: change.afterVersion ?? null,
+    status: change.status,
+    source: change.source ?? 'unknown',
+    description: change.description ?? null,
+    created_at: change.createdAt,
+    updated_at: change.updatedAt,
+  }
+}
+
+function fromPersistedChange(payload) {
+  return {
+    changeId: payload.change_id,
+    hostId: payload.host_id,
+    path: payload.path,
+    beforeContent: payload.before_content ?? null,
+    afterContent: payload.after_content ?? '',
+    beforeVersion: payload.before_version ?? null,
+    afterVersion: payload.after_version ?? null,
+    status: CHANGE_STATUSES.has(payload.status) ? payload.status : 'pending',
+    source: payload.source ?? 'unknown',
+    description: payload.description ?? undefined,
+    createdAt: payload.created_at ?? Date.now(),
+    updatedAt: payload.updated_at ?? payload.created_at ?? Date.now(),
+  }
+}
+
 async function writeJsonAtomic(filePath, value) {
   await mkdir(path.dirname(filePath), { recursive: true })
   const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
@@ -113,11 +149,13 @@ async function readJson(filePath, fallback) {
 export async function createControllerStore(dataDir) {
   const hostsPath = path.join(dataDir, 'hosts.json')
   const jobsPath = path.join(dataDir, 'jobs.json')
+  const changesPath = path.join(dataDir, 'changes.json')
   const logsDir = path.join(dataDir, 'logs')
   await mkdir(logsDir, { recursive: true })
 
   const hostsFile = await readJson(hostsPath, { current_host_id: null, hosts: [] })
   const jobsFile = await readJson(jobsPath, { jobs: [] })
+  const changesFile = await readJson(changesPath, { changes: [] })
   const hosts = new Map(hostsFile.hosts.map((row) => {
     const host = fromPersistedHost(row)
     return [host.hostId, host]
@@ -126,10 +164,15 @@ export async function createControllerStore(dataDir) {
     const job = fromPersistedJob(row)
     return [job.jobId, job]
   }))
+  const changes = new Map((Array.isArray(changesFile.changes) ? changesFile.changes : []).map((row) => {
+    const change = fromPersistedChange(row)
+    return [change.changeId, change]
+  }))
   let currentHostId = hostsFile.current_host_id
 
   let hostWrite = Promise.resolve()
   let jobWrite = Promise.resolve()
+  let changeWrite = Promise.resolve()
   const persistHosts = () => {
     hostWrite = hostWrite.then(() => writeJsonAtomic(hostsPath, {
       current_host_id: currentHostId,
@@ -142,6 +185,12 @@ export async function createControllerStore(dataDir) {
       jobs: [...jobs.values()].map(toPersistedJob),
     }))
     return jobWrite
+  }
+  const persistChanges = () => {
+    changeWrite = changeWrite.then(() => writeJsonAtomic(changesPath, {
+      changes: [...changes.values()].map(toPersistedChange),
+    }))
+    return changeWrite
   }
 
   return {
@@ -176,8 +225,12 @@ export async function createControllerStore(dataDir) {
     async removeHost(hostId) {
       if (!hosts.has(hostId)) throw new Error(`host not found: ${hostId}`)
       hosts.delete(hostId)
+      for (const [changeId, change] of changes) {
+        if (change.hostId === hostId) changes.delete(changeId)
+      }
       if (currentHostId === hostId) currentHostId = null
       await persistHosts()
+      await persistChanges()
     },
     async createJob(input) {
       if (!JOB_STATUSES.has(input.status)) {
@@ -230,6 +283,57 @@ export async function createControllerStore(dataDir) {
       rows.sort((left, right) => right.startedAt - left.startedAt)
       if (filter.limit !== undefined) rows = rows.slice(0, filter.limit)
       return rows.map((job) => ({ ...job }))
+    },
+    async recordChange(input) {
+      if (!input.hostId || !input.path) throw new Error('change hostId and path are required')
+      const now = input.createdAt ?? Date.now()
+      const change = {
+        changeId: input.changeId ?? randomUUID(),
+        hostId: input.hostId,
+        path: input.path,
+        beforeContent: input.beforeContent ?? null,
+        afterContent: input.afterContent ?? '',
+        beforeVersion: input.beforeVersion ?? null,
+        afterVersion: input.afterVersion ?? null,
+        status: input.status ?? 'pending',
+        source: input.source ?? 'unknown',
+        description: input.description,
+        createdAt: now,
+        updatedAt: input.updatedAt ?? now,
+      }
+      if (!CHANGE_STATUSES.has(change.status)) throw new Error(`invalid change status: ${change.status}`)
+      changes.set(change.changeId, change)
+      await persistChanges()
+      return { ...change }
+    },
+    async updateChange(changeId, patch) {
+      const current = changes.get(changeId)
+      if (!current) throw new Error(`change not found: ${changeId}`)
+      if (patch.status !== undefined && !CHANGE_STATUSES.has(patch.status)) {
+        throw new Error(`invalid change status: ${patch.status}`)
+      }
+      const next = { ...current, ...patch, updatedAt: patch.updatedAt ?? Date.now() }
+      changes.set(changeId, next)
+      await persistChanges()
+      return { ...next }
+    },
+    getChange(changeId) {
+      const change = changes.get(changeId)
+      return change ? { ...change } : undefined
+    },
+    listChanges(filter = {}) {
+      let rows = [...changes.values()]
+      if (filter.hostId) rows = rows.filter((change) => change.hostId === filter.hostId)
+      if (filter.status) {
+        const statuses = Array.isArray(filter.status) ? filter.status : [filter.status]
+        rows = rows.filter((change) => statuses.includes(change.status))
+      }
+      if (filter.path) rows = rows.filter((change) => change.path === filter.path)
+      if (filter.since !== undefined) rows = rows.filter((change) => change.createdAt >= Number(filter.since))
+      if (filter.until !== undefined) rows = rows.filter((change) => change.createdAt <= Number(filter.until))
+      rows.sort((left, right) => right.createdAt - left.createdAt)
+      if (filter.limit !== undefined) rows = rows.slice(0, filter.limit)
+      return rows.map((change) => ({ ...change }))
     },
     async appendJobLog(jobId, chunk) {
       if (!jobs.has(jobId)) throw new Error(`job not found: ${jobId}`)

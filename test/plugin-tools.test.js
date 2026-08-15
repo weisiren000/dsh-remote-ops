@@ -41,7 +41,7 @@ test('注册 host 工具，多机无当前目标时 host_bash 返回工具错误
   })
   assert.deepEqual(
     registered.map((item) => item.name).sort(),
-    ['host_bash', 'host_job_log', 'host_jobs', 'host_list', 'host_pair', 'host_use'],
+    ['host_bash', 'host_job_log', 'host_jobs', 'host_list', 'host_list_files', 'host_pair', 'host_read_file', 'host_review_changes', 'host_use', 'host_write_file'],
   )
   for (const definition of registered) {
     assert.equal(typeof definition.output?.render, 'function')

@@ -91,6 +91,85 @@ export function createSettingsClient(fetchImpl = fetch) {
       const query = new URLSearchParams({ tail: String(tail) })
       return fetchImpl(`${PREFIX}/jobs/${encodeURIComponent(jobId)}/log?${query}`).then(parse)
     },
+    files(hostId, remotePath) {
+      const query = remotePath ? `?path=${encodeURIComponent(remotePath)}` : ''
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/files${query}`).then(parse)
+    },
+    listFiles(hostId, remotePath) {
+      const query = remotePath ? `?path=${encodeURIComponent(remotePath)}` : ''
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/files${query}`).then(parse)
+    },
+    file(hostId, remotePath) {
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/file?path=${encodeURIComponent(remotePath)}`).then(parse)
+    },
+    readFile(hostId, remotePath) {
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/file?path=${encodeURIComponent(remotePath)}`).then(parse)
+    },
+    saveFile(hostId, input) {
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/file`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          path: input.path,
+          content: input.content,
+          before_content: input.beforeContent,
+          expected_version: input.expectedVersion,
+          source: input.source,
+          description: input.description,
+        }),
+      }).then(parse)
+    },
+    deleteFile(hostId, input) {
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/file`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: input.path, expected_version: input.expectedVersion, source: input.source, description: input.description }),
+      }).then(parse)
+    },
+    writeFile(hostId, input) {
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/file`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          path: input.path,
+          content: input.content,
+          before_content: input.beforeContent,
+          expected_version: input.expectedVersion,
+          source: input.source,
+          description: input.description,
+        }),
+      }).then(parse)
+    },
+    terminal(hostId, input) {
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/terminal`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          command: input.command,
+          workdir: input.workdir,
+          timeout_ms: input.timeoutMs,
+          description: input.description,
+        }),
+      }).then(parse)
+    },
+    changes(hostId, filters = {}) {
+      const query = new URLSearchParams()
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') query.set(key, value)
+      })
+      const suffix = query.toString() ? `?${query}` : ''
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/changes${suffix}`).then(parse)
+    },
+    change(changeId) {
+      return fetchImpl(`${PREFIX}/changes/${encodeURIComponent(changeId)}`).then(parse)
+    },
+    reviewChange(changeId, action) {
+      return fetchImpl(`${PREFIX}/changes/${encodeURIComponent(changeId)}/${encodeURIComponent(action)}`, { method: 'POST' }).then(parse)
+    },
+    listFiles(hostId, remotePath) { return this.files(hostId, remotePath) },
+    readFile(hostId, remotePath) { return this.file(hostId, remotePath) },
+    writeFile(hostId, input) { return this.saveFile(hostId, input) },
+    deleteRemoteFile(hostId, input) { return this.deleteFile(hostId, input) },
   }
 }
 

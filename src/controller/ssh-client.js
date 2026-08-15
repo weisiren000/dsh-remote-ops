@@ -2,6 +2,12 @@ import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import ssh2 from 'ssh2'
+import {
+  deleteSftpFile,
+  listSftpDirectory,
+  readSftpFile,
+  writeSftpFile,
+} from './sftp.js'
 
 const { Client, utils } = ssh2
 const DEFAULT_PORT = 22
@@ -369,6 +375,22 @@ export function createSshClient({ keysDir }) {
       const connection = await ensureSession(host)
       const remote = await inspectRemote(connection)
       return { hostId: host.hostId, ...remote, ts: Date.now() }
+    },
+    async listDirectory(host, remotePath) {
+      const connection = await ensureSession(host)
+      return listSftpDirectory(connection, remotePath || host.cwd || '.')
+    },
+    async readRemoteFile(host, remotePath) {
+      const connection = await ensureSession(host)
+      return readSftpFile(connection, remotePath)
+    },
+    async writeRemoteFile(host, remotePath, content, expectedVersion) {
+      const connection = await ensureSession(host)
+      return writeSftpFile(connection, remotePath, content, expectedVersion)
+    },
+    async deleteRemoteFile(host, remotePath) {
+      const connection = await ensureSession(host)
+      return deleteSftpFile(connection, remotePath)
     },
     async reconnect(host) {
       sessions.get(host.hostId)?.end()

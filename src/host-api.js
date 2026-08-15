@@ -41,6 +41,23 @@ function publicJob(job, log) {
   }
 }
 
+function publicChange(change) {
+  return {
+    change_id: change.changeId,
+    host_id: change.hostId,
+    path: change.path,
+    before_content: change.beforeContent ?? null,
+    after_content: change.afterContent ?? '',
+    before_version: change.beforeVersion ?? null,
+    after_version: change.afterVersion ?? null,
+    status: change.status,
+    source: change.source,
+    description: change.description ?? null,
+    created_at: change.createdAt,
+    updated_at: change.updatedAt,
+  }
+}
+
 function formatDuration(startedAt, now = Date.now()) {
   if (!startedAt) return undefined
   const seconds = Math.max(0, Math.floor((now - startedAt) / 1000))
@@ -99,6 +116,16 @@ function matchRoute(method, pathname) {
   if (method === 'GET' && health) return { name: 'health', hostId: decodeURIComponent(health[1]) }
   const jobs = /^\/hosts\/([^/]+)\/jobs$/.exec(pathname)
   if (method === 'GET' && jobs) return { name: 'hostJobs', hostId: decodeURIComponent(jobs[1]) }
+  const files = /^\/hosts\/([^/]+)\/files$/.exec(pathname)
+  if (method === 'GET' && files) return { name: 'files', hostId: decodeURIComponent(files[1]) }
+  const file = /^\/hosts\/([^/]+)\/file$/.exec(pathname)
+  if (method === 'GET' && file) return { name: 'readFile', hostId: decodeURIComponent(file[1]) }
+  if (method === 'PUT' && file) return { name: 'writeFile', hostId: decodeURIComponent(file[1]) }
+  if (method === 'DELETE' && file) return { name: 'deleteFile', hostId: decodeURIComponent(file[1]) }
+  const terminal = /^\/hosts\/([^/]+)\/terminal$/.exec(pathname)
+  if (method === 'POST' && terminal) return { name: 'terminal', hostId: decodeURIComponent(terminal[1]) }
+  const changes = /^\/hosts\/([^/]+)\/changes$/.exec(pathname)
+  if (method === 'GET' && changes) return { name: 'hostChanges', hostId: decodeURIComponent(changes[1]) }
   const host = /^\/hosts\/([^/]+)$/.exec(pathname)
   if (host && method === 'POST') return { name: 'update', hostId: decodeURIComponent(host[1]) }
   if (host && method === 'DELETE') return { name: 'remove', hostId: decodeURIComponent(host[1]) }
@@ -108,6 +135,12 @@ function matchRoute(method, pathname) {
   if (method === 'POST' && cancel) return { name: 'cancel', jobId: decodeURIComponent(cancel[1]) }
   const log = /^\/jobs\/([^/]+)\/log$/.exec(pathname)
   if (method === 'GET' && log) return { name: 'log', jobId: decodeURIComponent(log[1]) }
+  const review = /^\/changes\/([^/]+)\/(accept|revert|restore)$/.exec(pathname)
+  if (method === 'POST' && review) {
+    return { name: 'reviewChange', changeId: decodeURIComponent(review[1]), action: review[2] }
+  }
+  const change = /^\/changes\/([^/]+)$/.exec(pathname)
+  if (method === 'GET' && change) return { name: 'change', changeId: decodeURIComponent(change[1]) }
   return null
 }
 
@@ -210,6 +243,83 @@ export function createHostApiHandler({ runner }) {
         json(res, 200, { jobs: jobs.map((job) => publicJob(job)) })
         return
       }
+      if (route.name === 'files') {
+        const result = await runner.listFiles(route.hostId, url.searchParams.get('path') || undefined)
+        json(res, 200, {
+          host_id: result.hostId,
+          path: result.path,
+          entries: result.entries,
+        })
+        return
+      }
+      if (route.name === 'readFile') {
+        const result = await runner.readRemoteFile(route.hostId, url.searchParams.get('path'))
+        json(res, 200, {
+          host_id: result.hostId,
+          path: result.path,
+          content: result.content,
+          size: result.size,
+          mtime: result.mtime,
+          version: result.version,
+        })
+        return
+      }
+      if (route.name === 'writeFile') {
+        const body = await readJson(req)
+        const result = await runner.writeRemoteFile({
+          host: route.hostId,
+          path: body.path,
+          content: body.content,
+          beforeContent: body.before_content,
+          expectedVersion: body.expected_version,
+          source: body.source,
+          description: body.description,
+        })
+        json(res, 200, publicChange(result))
+        return
+      }
+      if (route.name === 'deleteFile') {
+        const body = await readJson(req)
+        const result = await runner.deleteRemoteFile({
+          host: route.hostId,
+          path: body.path,
+          expectedVersion: body.expected_version,
+          source: body.source,
+          description: body.description,
+        })
+        json(res, 200, publicChange(result))
+        return
+      }
+      if (route.name === 'terminal') {
+        const body = await readJson(req)
+        const result = await runner.exec({
+          host: route.hostId,
+          command: body.command,
+          description: body.description ?? '远程终端命令',
+          workdir: body.workdir,
+          timeoutMs: body.timeout_ms,
+        })
+        json(res, 200, publicJob(result, result.log))
+        return
+      }
+      if (route.name === 'hostChanges') {
+        const changes = runner.listChanges({
+          hostId: route.hostId,
+          status: url.searchParams.get('status') || undefined,
+          path: url.searchParams.get('path') || undefined,
+          limit: Math.min(200, Math.max(1, Number(url.searchParams.get('limit') ?? 50))),
+        })
+        json(res, 200, { changes: changes.map(publicChange) })
+        return
+      }
+      if (route.name === 'change') {
+        json(res, 200, publicChange(await runner.readChange(route.changeId)))
+        return
+      }
+      if (route.name === 'reviewChange') {
+        json(res, 200, publicChange(await runner.reviewChange(route.changeId, route.action)))
+        return
+      }
       if (route.name === 'job') {
         const job = await runner.readJob(route.jobId)
         json(res, 200, publicJob(job, job.log))
@@ -227,17 +337,23 @@ export function createHostApiHandler({ runner }) {
       }
     } catch (error) {
       const code = error?.code ?? 'REMOTE_OPS_ERROR'
-      const status = code === 'HOST_NOT_FOUND' || code === 'JOB_NOT_FOUND'
+      const status = code === 'HOST_NOT_FOUND' || code === 'JOB_NOT_FOUND' || code === 'CHANGE_NOT_FOUND'
         ? 404
         : code === 'HOST_KEY_UNTRUSTED' || code === 'HOST_KEY_CHANGED'
           ? 409
           : code === 'SSH_CONNECT_FAILED' || code === 'SSH_AUTH_FAILED'
             ? 401
-            : 400
+            : code === 'REMOTE_FILE_CONFLICT'
+              ? 409
+              : code === 'SSH_SFTP_FAILED'
+                ? 502
+                : 400
       json(res, status, {
         error: error instanceof Error ? error.message : 'failed',
         code,
         ...(error?.fingerprint ? { fingerprint: error.fingerprint } : {}),
+        ...(error?.currentVersion !== undefined ? { current_version: error.currentVersion } : {}),
+        ...(error?.expectedVersion !== undefined ? { expected_version: error.expectedVersion } : {}),
       })
     }
   }
