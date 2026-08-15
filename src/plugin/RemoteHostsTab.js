@@ -1,12 +1,6 @@
 import { createElement as h, useEffect, useState } from 'react'
 import { createSettingsClient } from './client-api.js'
 
-const OVERRIDES = [
-  { value: 'follow', label: '跟随默认' },
-  { value: 'auto', label: '这台全自动' },
-  { value: 'ask', label: '这台全要问' },
-]
-
 export function RemoteHostsTab({ api = createSettingsClient() }) {
   const [address, setAddress] = useState('')
   const [pairingCode, setPairingCode] = useState('')
@@ -60,15 +54,6 @@ export function RemoteHostsTab({ api = createSettingsClient() }) {
     }
   }
 
-  const onOverride = async (hostId, approvalOverride) => {
-    try {
-      await api.update(hostId, { approvalOverride })
-      await refresh()
-    } catch (err) {
-      setError(err.message)
-    }
-  }
-
   const onRemove = async (hostId) => {
     try {
       await api.remove(hostId)
@@ -106,10 +91,6 @@ export function RemoteHostsTab({ api = createSettingsClient() }) {
         h('span', null, host.dialect),
         host.current ? h('span', null, '当前目标') : null,
         h('button', { type: 'button', onClick: () => onUse(host.host_id) }, '设为当前'),
-        h('select', {
-          value: host.approval_override,
-          onChange: (event) => onOverride(host.host_id, event.target.value),
-        }, OVERRIDES.map((item) => h('option', { key: item.value, value: item.value }, item.label))),
         h('button', { type: 'button', onClick: () => onRemove(host.host_id) }, '不再管理'),
       )),
     ),

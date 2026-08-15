@@ -14,6 +14,13 @@ function codedError(code, message, details = {}) {
   return error
 }
 
+function connectionError(error) {
+  if (error?.code === 'AUTH_FAILED' || error?.level === 'client-authentication') {
+    return codedError('SSH_AUTH_FAILED', 'SSH 身份认证失败', { cause: error })
+  }
+  return codedError('SSH_CONNECT_FAILED', error?.message || 'SSH 连接失败', { cause: error })
+}
+
 function quotePosix(value) {
   return `'${String(value).replaceAll("'", `'"'"'`)}'`
 }
@@ -57,10 +64,14 @@ function openConnection(config) {
         return
       }
       if (actualFingerprint && actualFingerprint !== config.hostFingerprint) {
-        reject(codedError('HOST_KEY_CHANGED', '服务器 SSH 指纹与已保存记录不一致'))
+        reject(codedError(
+          'HOST_KEY_CHANGED',
+          '服务器 SSH 指纹与已保存记录不一致',
+          { fingerprint: actualFingerprint },
+        ))
         return
       }
-      reject(codedError('SSH_CONNECT_FAILED', error.message || 'SSH 连接失败', { cause: error }))
+      reject(connectionError(error))
     }
     connection.once('ready', () => {
       if (settled) return
@@ -89,7 +100,7 @@ function openConnection(config) {
   })
 }
 
-function execChannel(connection, command, options = {}) {
+export function execChannel(connection, command, options = {}) {
   return new Promise((resolve, reject) => {
     let stream
     let timer
@@ -111,7 +122,7 @@ function execChannel(connection, command, options = {}) {
     const onAbort = () => {
       aborted = true
       if (!stream) return
-      stream.signal('KILL')
+      stream.signal('TERM')
       stream.close()
     }
     options.signal?.addEventListener('abort', onAbort, { once: true })
@@ -121,6 +132,9 @@ function execChannel(connection, command, options = {}) {
         return
       }
       stream = channel
+      const remoteJobId = options.remoteJobId ?? randomUUID()
+      options.onRemoteJobId?.(remoteJobId)
+      options.onChannel?.(channel, remoteJobId)
       if (options.timeoutMs !== undefined) {
         timer = setTimeout(() => {
           timedOut = true
@@ -150,7 +164,7 @@ function execChannel(connection, command, options = {}) {
           signal,
           timedOut,
           aborted,
-          remoteJobId: randomUUID(),
+          remoteJobId,
           streamed: true,
         })
       })
@@ -245,14 +259,26 @@ function publicKeyFromPrivate(privateKey) {
 export function createSshClient({ keysDir }) {
   const sessions = new Map()
   const connecting = new Map()
+  const reconnectState = new Map()
+  const activeChannels = new Map()
   let disposed = false
+
+  const markReconnectFailure = (hostId) => {
+    const state = reconnectState.get(hostId) ?? { attempts: 0, nextAt: 0 }
+    state.attempts += 1
+    state.nextAt = Date.now() + Math.min(30_000, 500 * (2 ** Math.min(state.attempts, 6)))
+    reconnectState.set(hostId, state)
+  }
 
   const rememberSession = (hostId, connection) => {
     const previous = sessions.get(hostId)
     previous?.end()
     sessions.set(hostId, connection)
     connection.once('close', () => {
-      if (sessions.get(hostId) === connection) sessions.delete(hostId)
+      if (sessions.get(hostId) === connection) {
+        sessions.delete(hostId)
+        markReconnectFailure(hostId)
+      }
     })
   }
 
@@ -260,6 +286,10 @@ export function createSshClient({ keysDir }) {
     if (disposed) throw codedError('SSH_CLIENT_DISPOSED', 'SSH 客户端已释放')
     const current = sessions.get(host.hostId)
     if (current) return current
+    const state = reconnectState.get(host.hostId)
+    if (state?.nextAt > Date.now()) {
+      await new Promise((resolve) => setTimeout(resolve, state.nextAt - Date.now()))
+    }
     const pending = connecting.get(host.hostId)
     if (pending) return pending
     const task = (async () => {
@@ -274,11 +304,15 @@ export function createSshClient({ keysDir }) {
         hostFingerprint: host.hostFingerprint,
       })
       rememberSession(host.hostId, opened.connection)
+      reconnectState.delete(host.hostId)
       return opened.connection
     })()
     connecting.set(host.hostId, task)
     try {
       return await task
+    } catch (error) {
+      markReconnectFailure(host.hostId)
+      throw error
     } finally {
       if (connecting.get(host.hostId) === task) connecting.delete(host.hostId)
     }
@@ -324,7 +358,6 @@ export function createSshClient({ keysDir }) {
           os: remote.os,
           dialect: remote.dialect,
           lastHeartbeatAt: Date.now(),
-          approvalOverride: 'follow',
         }
       } catch (error) {
         opened.connection.end()
@@ -337,6 +370,12 @@ export function createSshClient({ keysDir }) {
       const remote = await inspectRemote(connection)
       return { hostId: host.hostId, ...remote, ts: Date.now() }
     },
+    async reconnect(host) {
+      sessions.get(host.hostId)?.end()
+      sessions.delete(host.hostId)
+      reconnectState.delete(host.hostId)
+      return this.heartbeat(host)
+    },
     async exec(host, spec) {
       const connection = await ensureSession(host)
       const command = spec.workdir && host.dialect === 'pwsh'
@@ -347,7 +386,27 @@ export function createSshClient({ keysDir }) {
       const remoteCommand = host.dialect === 'pwsh'
         ? `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encodePowerShell(command)}`
         : command
-      return execChannel(connection, remoteCommand, spec)
+      return execChannel(connection, remoteCommand, {
+        ...spec,
+        remoteJobId: spec.remoteJobId,
+        onRemoteJobId(remoteJobId) {
+          spec.onRemoteJobId?.(remoteJobId)
+        },
+        onChannel(channel, remoteJobId) {
+          activeChannels.set(remoteJobId, { channel, hostId: host.hostId })
+          channel.once('close', () => {
+            if (activeChannels.get(remoteJobId)?.channel === channel) activeChannels.delete(remoteJobId)
+          })
+        },
+      })
+    },
+    async cancel(host, remoteJobId) {
+      if (!remoteJobId) return { supported: false, reason: 'SSH_CHANNEL_NOT_READY' }
+      const active = activeChannels.get(remoteJobId)
+      if (!active || active.hostId !== host.hostId) return { supported: false, reason: 'SSH_CHANNEL_NOT_FOUND' }
+      active.channel.signal('TERM')
+      active.channel.close()
+      return { supported: true, remoteJobId }
     },
     async remove(host) {
       let connection = sessions.get(host.hostId)
@@ -380,6 +439,8 @@ export function createSshClient({ keysDir }) {
       for (const connection of sessions.values()) connection.end()
       sessions.clear()
       connecting.clear()
+      reconnectState.clear()
+      activeChannels.clear()
     },
   }
 }

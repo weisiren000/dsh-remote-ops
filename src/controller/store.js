@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile, appendFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile, appendFile, open, stat } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { fromWireHost, toWireHost } from '../protocol.js'
@@ -32,6 +32,11 @@ function toPersistedHost(host) {
     ssh_username: host.sshUsername ?? null,
     host_fingerprint: host.hostFingerprint ?? null,
     private_key_path: host.privateKeyPath ?? null,
+    status: host.status ?? (host.online === false ? 'offline' : 'online'),
+    last_error: host.lastError ?? null,
+    last_error_at: host.lastErrorAt ?? null,
+    latency_ms: host.latencyMs ?? null,
+    connection_started_at: host.connectionStartedAt ?? null,
   }
 }
 
@@ -45,6 +50,11 @@ function fromPersistedHost(payload) {
     sshUsername: payload.ssh_username ?? undefined,
     hostFingerprint: payload.host_fingerprint ?? undefined,
     privateKeyPath: payload.private_key_path ?? undefined,
+    status: payload.status ?? (payload.online === false ? 'offline' : 'online'),
+    lastError: payload.last_error ?? undefined,
+    lastErrorAt: payload.last_error_at ?? undefined,
+    latencyMs: payload.latency_ms ?? undefined,
+    connectionStartedAt: payload.connection_started_at ?? undefined,
   }
 }
 
@@ -60,6 +70,9 @@ function toPersistedJob(job) {
     finished_at: job.finishedAt ?? null,
     approval_denied: job.approvalDenied === true,
     remote_job_id: job.remoteJobId ?? null,
+    error_code: job.errorCode ?? null,
+    error_message: job.errorMessage ?? null,
+    canceled_at: job.canceledAt ?? null,
   }
 }
 
@@ -75,6 +88,9 @@ function fromPersistedJob(payload) {
     finishedAt: payload.finished_at ?? undefined,
     approvalDenied: payload.approval_denied === true,
     remoteJobId: payload.remote_job_id ?? undefined,
+    errorCode: payload.error_code ?? undefined,
+    errorMessage: payload.error_message ?? undefined,
+    canceledAt: payload.canceled_at ?? undefined,
   }
 }
 
@@ -130,7 +146,12 @@ export async function createControllerStore(dataDir) {
 
   return {
     async upsertHost(record) {
-      hosts.set(record.hostId, { ...record })
+      const previous = hosts.get(record.hostId)
+      hosts.set(record.hostId, {
+        ...previous,
+        ...record,
+        status: record.status ?? (record.online === false ? 'offline' : 'online'),
+      })
       await persistHosts()
       return this.getHost(record.hostId)
     },
@@ -173,6 +194,9 @@ export async function createControllerStore(dataDir) {
         finishedAt: input.finishedAt,
         approvalDenied: input.approvalDenied === true,
         remoteJobId: input.approvalDenied ? undefined : input.remoteJobId,
+        errorCode: input.errorCode,
+        errorMessage: input.errorMessage,
+        canceledAt: input.canceledAt,
       }
       jobs.set(job.jobId, job)
       await persistJobs()
@@ -197,6 +221,12 @@ export async function createControllerStore(dataDir) {
     listJobs(filter = {}) {
       let rows = [...jobs.values()]
       if (filter.hostId) rows = rows.filter((job) => job.hostId === filter.hostId)
+      if (filter.status) {
+        const statuses = Array.isArray(filter.status) ? filter.status : [filter.status]
+        rows = rows.filter((job) => statuses.includes(job.status))
+      }
+      if (filter.since !== undefined) rows = rows.filter((job) => job.startedAt >= Number(filter.since))
+      if (filter.until !== undefined) rows = rows.filter((job) => job.startedAt <= Number(filter.until))
       rows.sort((left, right) => right.startedAt - left.startedAt)
       if (filter.limit !== undefined) rows = rows.slice(0, filter.limit)
       return rows.map((job) => ({ ...job }))
@@ -211,6 +241,28 @@ export async function createControllerStore(dataDir) {
       } catch (error) {
         if (error && error.code === 'ENOENT') return ''
         throw error
+      }
+    },
+    async readJobLogTail(jobId, tail = 8192) {
+      if (!jobs.has(jobId)) throw new Error(`job not found: ${jobId}`)
+      const filePath = path.join(logsDir, `${jobId}.log`)
+      const length = Math.max(0, Number(tail) || 0)
+      if (length === 0) return ''
+      let size
+      try {
+        size = (await stat(filePath)).size
+      } catch (error) {
+        if (error && error.code === 'ENOENT') return ''
+        throw error
+      }
+      const handle = await open(filePath, 'r')
+      try {
+        const bytes = Math.min(length, size)
+        const buffer = Buffer.alloc(bytes)
+        await handle.read(buffer, 0, bytes, size - bytes)
+        return buffer.toString('utf8')
+      } finally {
+        await handle.close()
       }
     },
   }

@@ -25,7 +25,6 @@ function host(id, name, online = true) {
     os: 'linux',
     dialect: 'bash',
     lastHeartbeatAt: 1,
-    approvalOverride: 'follow',
   }
 }
 

@@ -5,11 +5,6 @@ window.__ModuleLoader__.load({
     const { createElement: h, useEffect, useMemo, useState } = React
     const PREFIX = '/remote-ops/v1'
     const STYLE_ID = 'dsh-remote-ops-styles'
-    const OVERRIDES = [
-      { value: 'follow', label: '跟随默认策略' },
-      { value: 'auto', label: '全自动执行' },
-      { value: 'ask', label: '每次都询问' },
-    ]
     const JOB_STATUSES = {
       running: { label: '执行中', tone: 'info' },
       succeeded: { label: '已完成', tone: 'success' },
@@ -78,22 +73,27 @@ window.__ModuleLoader__.load({
       .remoteOps__badge--muted { background: var(--dsw-alias-bg-module-platform); color: var(--dsw-alias-label-tertiary); }
       .remoteOps__statusDot { background: currentColor; border-radius: 50%; height: 6px; margin-right: 5px; width: 6px; }
       .remoteOps__address { color: var(--dsw-alias-label-tertiary); display: block; font-size: 12px; line-height: 18px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .remoteOps__hostFacts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0 0; padding-top: 13px; border-top: 1px solid var(--dsw-alias-border-l1); }
+      .remoteOps__hostFacts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 14px 0 0; padding-top: 13px; border-top: 1px solid var(--dsw-alias-border-l1); }
       .remoteOps__fact { min-width: 0; }
       .remoteOps__fact dt { color: var(--dsw-alias-label-caption); font-size: 11px; line-height: 16px; }
       .remoteOps__fact dd { color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; margin: 2px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .remoteOps__fact--wide { grid-column: 1 / -1; }
       .remoteOps__hostActions { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-top: 14px; }
-      .remoteOps__policy { display: flex; flex-direction: column; gap: 5px; min-width: 180px; width: 230px; }
-      .remoteOps__policyLabel { color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }
       .remoteOps__buttonGroup { align-items: center; display: flex; gap: 4px; }
       .remoteOps__empty, .remoteOps__loading { border: 1px dashed var(--dsw-alias-border-l3); border-radius: 8px; color: var(--dsw-alias-label-tertiary); padding: 22px 16px; text-align: center; }
       .remoteOps__emptyTitle { color: var(--dsw-alias-label-secondary); display: block; font-size: 13px; font-weight: 500; line-height: 20px; }
       .remoteOps__emptyText { display: block; font-size: 12px; line-height: 18px; margin-top: 3px; }
       .remoteOps__jobs { border-top: 1px solid var(--dsw-alias-border-l2); list-style: none; margin: 0; padding: 0; }
+      .remoteOps__jobToolbar { align-items: center; display: flex; gap: 8px; }
+      .remoteOps__jobFilter { height: 30px; width: auto; }
       .remoteOps__job { align-items: center; border-bottom: 1px solid var(--dsw-alias-border-l1); display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) auto auto; min-height: 48px; padding: 8px 2px; }
+      .remoteOps__job--expanded { align-items: start; }
       .remoteOps__jobMain { min-width: 0; }
       .remoteOps__jobDescription { color: var(--dsw-alias-label-secondary); display: block; font-size: 13px; line-height: 19px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .remoteOps__jobTime, .remoteOps__jobExit { color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 17px; white-space: nowrap; }
+      .remoteOps__jobActions { align-items: center; display: flex; gap: 6px; }
+      .remoteOps__jobLogButton { height: 28px; padding: 0 8px; }
+      .remoteOps__jobLog { background: var(--dsw-alias-bg-base); border-radius: 6px; color: var(--dsw-alias-label-secondary); font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; margin: 6px 0 0; max-height: 180px; overflow: auto; padding: 8px; white-space: pre-wrap; }
       @media (max-width: 680px) {
         .remoteOps__overview { grid-template-columns: 1fr 1fr; }
         .remoteOps__metric:first-child { grid-column: 1 / -1; border-bottom: 1px solid var(--dsw-alias-border-l2); }
@@ -102,11 +102,11 @@ window.__ModuleLoader__.load({
         .remoteOps__field--wide { grid-column: auto; }
         .remoteOps__formFooter, .remoteOps__hostActions { align-items: stretch; flex-direction: column; }
         .remoteOps__primary { width: 100%; }
-        .remoteOps__policy { width: 100%; }
         .remoteOps__buttonGroup { justify-content: flex-end; }
         .remoteOps__hostFacts { grid-template-columns: 1fr 1fr; }
         .remoteOps__fact:last-child { grid-column: 1 / -1; }
         .remoteOps__job { grid-template-columns: minmax(0, 1fr) auto; }
+        .remoteOps__jobToolbar { align-items: flex-end; flex-direction: column; }
         .remoteOps__jobExit { display: none; }
       }
       @media (prefers-reduced-motion: reduce) { .remoteOps__host { transition: none; } }
@@ -154,13 +154,31 @@ window.__ModuleLoader__.load({
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             display_name: patch.displayName,
-            approval_override: patch.approvalOverride,
           }),
         }).then(parse),
         remove: (hostId) => fetch(`${PREFIX}/hosts/${encodeURIComponent(hostId)}`, {
           method: 'DELETE',
         }).then(parse),
-        jobs: (hostId) => fetch(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/jobs`).then(parse),
+        reconnect: (hostId, hostFingerprint) => {
+          const init = { method: 'POST' }
+          if (hostFingerprint) {
+            init.headers = { 'content-type': 'application/json' }
+            init.body = JSON.stringify({ host_fingerprint: hostFingerprint })
+          }
+          return fetch(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/reconnect`, init).then(parse)
+        },
+        diagnose: (hostId) => fetch(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/diagnose`, { method: 'POST' }).then(parse),
+        health: (hostId) => fetch(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/health`).then(parse),
+        jobs: (hostId, filters = {}) => {
+          const query = new URLSearchParams()
+          Object.entries(filters).forEach(([key, value]) => {
+            if (value !== undefined && value !== null && value !== '') query.set(key, value)
+          })
+          const suffix = query.toString() ? `?${query}` : ''
+          return fetch(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/jobs${suffix}`).then(parse)
+        },
+        cancel: (jobId) => fetch(`${PREFIX}/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }).then(parse),
+        log: (jobId, tail = 200) => fetch(`${PREFIX}/jobs/${encodeURIComponent(jobId)}/log?tail=${encodeURIComponent(tail)}`).then(parse),
       }
     }
 
@@ -200,6 +218,33 @@ window.__ModuleLoader__.load({
       )
     }
 
+    const HOST_STATUSES = {
+      online: { label: '在线', tone: 'success' },
+      connecting: { label: '连接中', tone: 'info' },
+      offline: { label: '离线', tone: 'muted' },
+      auth_failed: { label: '认证失败', tone: 'error' },
+      key_missing: { label: '缺少密钥', tone: 'warn' },
+      degraded: { label: '降级', tone: 'warn' },
+    }
+
+    function HostStatusBadge({ host }) {
+      const key = host.status || host.connection_status || (host.online ? 'online' : 'offline')
+      const status = HOST_STATUSES[key] || { label: key, tone: 'muted' }
+      return h('span', { className: `remoteOps__badge remoteOps__badge--${status.tone}` },
+        h('span', { className: 'remoteOps__statusDot', 'aria-hidden': true }), status.label)
+    }
+
+    function formatLatency(value) {
+      if (value === undefined || value === null || value === '') return '暂无'
+      return `${Math.round(Number(value))} ms`
+    }
+
+    function formatTaskStats(host) {
+      const stats = host.task_stats || host.taskStats || {}
+      return ['running', 'succeeded', 'failed', 'timed_out', 'canceled', 'interrupted']
+        .map((key) => `${JOB_STATUSES[key]?.label || key} ${stats[key] ?? 0}`).join(' · ')
+    }
+
     function EmptyState({ title, text }) {
       return h('div', { className: 'remoteOps__empty' },
         h('span', { className: 'remoteOps__emptyTitle' }, title),
@@ -221,6 +266,9 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState(null)
       const [hosts, setHosts] = useState([])
       const [jobs, setJobs] = useState([])
+      const [jobFilter, setJobFilter] = useState('')
+      const [expandedJobs, setExpandedJobs] = useState({})
+      const [jobLogs, setJobLogs] = useState({})
       const [loading, setLoading] = useState(true)
       const [busy, setBusy] = useState(null)
 
@@ -228,13 +276,14 @@ window.__ModuleLoader__.load({
 
       const currentHost = useMemo(() => hosts.find((host) => host.current) ?? null, [hosts])
       const onlineCount = useMemo(() => hosts.filter((host) => host.online).length, [hosts])
+      const runningJobs = useMemo(() => jobs.some((job) => job.status === 'running'), [jobs])
 
       const refresh = async () => {
         const snapshot = await client.list()
         setHosts(snapshot.hosts ?? [])
         setError(null)
         if (snapshot.current_host_id) {
-          const listed = await client.jobs(snapshot.current_host_id)
+          const listed = await client.jobs(snapshot.current_host_id, { status: jobFilter })
           setJobs(listed.jobs ?? [])
         } else {
           setJobs([])
@@ -245,9 +294,24 @@ window.__ModuleLoader__.load({
         refresh()
           .catch((err) => setError(err.message))
           .finally(() => setLoading(false))
-        const timer = setInterval(() => refresh().catch(() => {}), 5_000)
+        const timer = setInterval(() => refresh().catch(() => {}), runningJobs ? 1_000 : 5_000)
         return () => clearInterval(timer)
-      }, [])
+      }, [jobFilter, runningJobs])
+
+      useEffect(() => {
+        const openJobs = Object.keys(expandedJobs).filter((id) => expandedJobs[id])
+        if (!openJobs.length) return undefined
+        let canceled = false
+        Promise.all(openJobs.map(async (jobId) => {
+          try {
+            const result = await client.log(jobId, 200)
+            if (!canceled) setJobLogs((current) => ({ ...current, [jobId]: result.log ?? '' }))
+          } catch (err) {
+            if (!canceled) setJobLogs((current) => ({ ...current, [jobId]: `[日志读取失败] ${err.message}` }))
+          }
+        }))
+        return () => { canceled = true }
+      }, [expandedJobs, jobs])
 
       // Serialize row actions so the screen cannot show conflicting optimistic states.
       const runAction = async (key, action, successMessage) => {
@@ -294,6 +358,22 @@ window.__ModuleLoader__.load({
       }
 
       const refreshPage = () => runAction('refresh', refresh)
+      const toggleJobLog = (jobId) => setExpandedJobs((current) => ({ ...current, [jobId]: !current[jobId] }))
+      const cancelJob = (jobId) => runAction(`cancel:${jobId}`, () => client.cancel(jobId), '已请求取消任务。')
+      const reconnectHost = (hostId) => runAction(`reconnect:${hostId}`, async () => {
+        try {
+          await client.reconnect(hostId)
+        } catch (err) {
+          if (err.code !== 'HOST_KEY_CHANGED' || !err.fingerprint) throw err
+          const trusted = window.confirm(`服务器 SSH 指纹已变化：\n\n${err.fingerprint}\n\n确认这是你的服务器吗？`)
+          if (!trusted) throw new Error('已取消重连，服务器新指纹未被信任。')
+          await client.reconnect(hostId, err.fingerprint)
+        }
+      }, '正在重连主机。')
+      const diagnoseHost = (hostId) => runAction(`diagnose:${hostId}`, async () => {
+        const result = await client.diagnose(hostId)
+        if (result?.message || result?.summary) setNotice(result.message || result.summary)
+      }, '诊断已完成。')
       const canSubmit = connectionMode === 'ssh'
         ? sshHost.trim() && sshUsername.trim() && sshPassword
         : address.trim() && pairingCode.trim()
@@ -302,7 +382,7 @@ window.__ModuleLoader__.load({
         h('header', { className: 'remoteOps__header' },
           h('div', null,
             h('h3', { className: 'remoteOps__title' }, '远程主机'),
-            h('p', { className: 'remoteOps__intro' }, '管理已配对设备、命令审批策略与最近执行记录。'),
+            h('p', { className: 'remoteOps__intro' }, '管理已配对设备、连接状态与最近执行记录。'),
           ),
           h('button', {
             className: 'remoteOps__refresh',
@@ -406,7 +486,7 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'remoteOps__hostIdentity' },
                   h('div', { className: 'remoteOps__hostNameRow' },
                     h('span', { className: 'remoteOps__hostName' }, host.display_name || host.host_id),
-                    h(StatusBadge, { online: host.online }),
+                    h(HostStatusBadge, { host }),
                     host.current ? h('span', { className: 'remoteOps__badge remoteOps__badge--current' }, '当前目标') : null,
                   ),
                   h('span', { className: 'remoteOps__address', title: host.address }, host.address),
@@ -414,22 +494,27 @@ window.__ModuleLoader__.load({
               ),
               h('dl', { className: 'remoteOps__hostFacts' },
                 h('div', { className: 'remoteOps__fact' }, h('dt', null, '运行环境'), h('dd', { title: hostPlatform(host) }, hostPlatform(host))),
-                h('div', { className: 'remoteOps__fact' }, h('dt', null, '最近心跳'), h('dd', null, formatTime(host.last_heartbeat_at))),
+                h('div', { className: 'remoteOps__fact' }, h('dt', null, '连接延迟'), h('dd', null, formatLatency(host.latency_ms ?? host.latencyMs ?? host.connection_latency_ms))),
+                h('div', { className: 'remoteOps__fact' }, h('dt', null, '连接持续'), h('dd', null, host.connection_duration || host.connectionDuration || '暂无')),
+                h('div', { className: 'remoteOps__fact' }, h('dt', null, '最近心跳'), h('dd', null, formatTime(host.last_heartbeat_at ?? host.lastHeartbeatAt))),
                 h('div', { className: 'remoteOps__fact' }, h('dt', null, '工作目录'), h('dd', { title: host.cwd }, host.cwd || '未上报')),
+                h('div', { className: 'remoteOps__fact remoteOps__fact--wide' }, h('dt', null, '最近错误'), h('dd', { title: host.last_error || host.recent_error }, host.last_error || host.recent_error || '暂无')),
+                h('div', { className: 'remoteOps__fact remoteOps__fact--wide' }, h('dt', null, '任务统计'), h('dd', { title: formatTaskStats(host) }, formatTaskStats(host))),
               ),
               h('div', { className: 'remoteOps__hostActions' },
-                h('label', { className: 'remoteOps__policy' },
-                  h('span', { className: 'remoteOps__policyLabel' }, '命令审批策略'),
-                  h('select', {
-                    className: 'remoteOps__select',
-                    disabled: busy !== null,
-                    value: host.approval_override,
-                    onChange: (event) => runAction(`policy:${host.host_id}`, () => client.update(host.host_id, {
-                      approvalOverride: event.target.value,
-                    }), '审批策略已更新。'),
-                  }, OVERRIDES.map((item) => h('option', { key: item.value, value: item.value }, item.label))),
-                ),
                 h('div', { className: 'remoteOps__buttonGroup' },
+                  h('button', {
+                    className: 'remoteOps__secondary',
+                    type: 'button',
+                    disabled: busy !== null,
+                    onClick: () => reconnectHost(host.host_id),
+                  }, busy === `reconnect:${host.host_id}` ? '重连中…' : '重连'),
+                  h('button', {
+                    className: 'remoteOps__secondary',
+                    type: 'button',
+                    disabled: busy !== null,
+                    onClick: () => diagnoseHost(host.host_id),
+                  }, '诊断'),
                   h('button', {
                     className: 'remoteOps__secondary',
                     type: 'button',
@@ -452,7 +537,15 @@ window.__ModuleLoader__.load({
         h('section', { className: 'remoteOps__section' },
           h('div', { className: 'remoteOps__sectionHead' },
             h('h4', { className: 'remoteOps__sectionTitle' }, '最近任务'),
-            h('span', { className: 'remoteOps__sectionMeta' }, currentHost ? currentHost.display_name : '未选择主机'),
+            h('div', { className: 'remoteOps__jobToolbar' },
+              h('span', { className: 'remoteOps__sectionMeta' }, currentHost ? currentHost.display_name : '未选择主机'),
+              h('select', {
+                className: 'remoteOps__select remoteOps__jobFilter',
+                value: jobFilter,
+                onChange: (event) => setJobFilter(event.target.value),
+                'aria-label': '任务状态筛选',
+              }, [h('option', { key: 'all', value: '' }, '全部状态'), ...Object.entries(JOB_STATUSES).map(([value, item]) => h('option', { key: value, value }, item.label))]),
+            ),
           ),
           !currentHost
             ? h(EmptyState, { title: '没有当前执行目标', text: '选择一台主机后，这里会显示它的最近任务。' })
@@ -460,13 +553,19 @@ window.__ModuleLoader__.load({
               ? h(EmptyState, { title: '暂无执行记录', text: '该主机收到远程命令后，任务会显示在这里。' })
               : h('ul', { className: 'remoteOps__jobs' }, jobs.map((job) => {
                 const status = JOB_STATUSES[job.status] ?? { label: job.status, tone: 'muted' }
-                return h('li', { className: 'remoteOps__job', key: job.job_id },
+                const expanded = expandedJobs[job.job_id] === true
+                return h('li', { className: `remoteOps__job${expanded ? ' remoteOps__job--expanded' : ''}`, key: job.job_id },
                   h('div', { className: 'remoteOps__jobMain' },
                     h('span', { className: 'remoteOps__jobDescription', title: job.description || job.command }, job.description || job.command || '未命名任务'),
                     h('span', { className: 'remoteOps__jobTime' }, formatTime(job.started_at)),
+                    expanded ? h('pre', { className: 'remoteOps__jobLog' }, jobLogs[job.job_id] ?? '正在读取日志…') : null,
                   ),
                   h('span', { className: 'remoteOps__jobExit' }, job.exit_code === null ? '' : `退出码 ${job.exit_code}`),
-                  h('span', { className: `remoteOps__badge remoteOps__badge--${status.tone}` }, status.label),
+                  h('div', { className: 'remoteOps__jobActions' },
+                    h('button', { className: 'remoteOps__secondary remoteOps__jobLogButton', type: 'button', onClick: () => toggleJobLog(job.job_id) }, expanded ? '收起日志' : '查看日志'),
+                    job.status === 'running' ? h('button', { className: 'remoteOps__danger', type: 'button', disabled: busy !== null, onClick: () => cancelJob(job.job_id) }, busy === `cancel:${job.job_id}` ? '取消中…' : '取消') : null,
+                    h('span', { className: `remoteOps__badge remoteOps__badge--${status.tone}` }, status.label),
+                  ),
                 )
               })),
         ),

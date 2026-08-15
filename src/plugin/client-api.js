@@ -4,7 +4,7 @@ async function parse(response) {
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
     const error = new Error(body.error ?? `http ${response.status}`)
-    error.code = body.code ?? 'REMOTE_OPS_ERROR'
+    Object.assign(error, body, { code: body.code ?? 'REMOTE_OPS_ERROR' })
     throw error
   }
   return body
@@ -26,6 +26,20 @@ export function createSettingsClient(fetchImpl = fetch) {
         }),
       }).then(parse)
     },
+    ssh({ host, port, username, password, displayName, hostFingerprint }) {
+      return fetchImpl(`${PREFIX}/hosts/ssh`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          host,
+          port,
+          username,
+          password,
+          display_name: displayName,
+          host_fingerprint: hostFingerprint,
+        }),
+      }).then(parse)
+    },
     use(hostId) {
       return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/use`, {
         method: 'POST',
@@ -37,7 +51,6 @@ export function createSettingsClient(fetchImpl = fetch) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           display_name: patch.displayName,
-          approval_override: patch.approvalOverride,
         }),
       }).then(parse)
     },
@@ -46,8 +59,37 @@ export function createSettingsClient(fetchImpl = fetch) {
         method: 'DELETE',
       }).then(parse)
     },
-    jobs(hostId) {
-      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/jobs`).then(parse)
+    reconnect(hostId, hostFingerprint) {
+      const init = { method: 'POST' }
+      if (hostFingerprint) {
+        init.headers = { 'content-type': 'application/json' }
+        init.body = JSON.stringify({ host_fingerprint: hostFingerprint })
+      }
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/reconnect`, init).then(parse)
+    },
+    diagnose(hostId) {
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/diagnose`, { method: 'POST' }).then(parse)
+    },
+    health(hostId) {
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/health`).then(parse)
+    },
+    jobs(hostId, filters = {}) {
+      const query = new URLSearchParams()
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') query.set(key, value)
+      })
+      const suffix = query.toString() ? `?${query}` : ''
+      return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/jobs${suffix}`).then(parse)
+    },
+    job(jobId) {
+      return fetchImpl(`${PREFIX}/jobs/${encodeURIComponent(jobId)}`).then(parse)
+    },
+    cancel(jobId) {
+      return fetchImpl(`${PREFIX}/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }).then(parse)
+    },
+    log(jobId, tail = 200) {
+      const query = new URLSearchParams({ tail: String(tail) })
+      return fetchImpl(`${PREFIX}/jobs/${encodeURIComponent(jobId)}/log?${query}`).then(parse)
     },
   }
 }

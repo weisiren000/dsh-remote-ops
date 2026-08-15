@@ -97,6 +97,15 @@ export function createHostClient(options = {}) {
         ts: body.ts,
       }
     },
+    async diagnose(host) {
+      const started = Date.now()
+      const live = await this.heartbeat(host)
+      return { ...live, latencyMs: Date.now() - started }
+    },
+    async reconnect(host) {
+      if (host.transport === 'ssh') return ssh.reconnect(host)
+      return this.heartbeat(host)
+    },
     async exec(host, spec) {
       if (host.transport === 'ssh') return ssh.exec(host, spec)
       const url = assertAddress(host.address)
@@ -120,12 +129,14 @@ export function createHostClient(options = {}) {
       }
     },
     async cancel(host, remoteJobId) {
-      if (host.transport === 'ssh') return undefined
+      if (host.transport === 'ssh') return ssh.cancel(host, remoteJobId)
+      if (!remoteJobId) return { supported: false, reason: 'HOSTD_JOB_ID_UNAVAILABLE' }
       const url = assertAddress(host.address)
-      return request(new URL(`/v1/exec/${remoteJobId}/cancel`, url), {
+      const result = await request(new URL(`/v1/exec/${remoteJobId}/cancel`, url), {
         method: 'POST',
         headers: authHeaders(host),
       })
+      return { supported: result.ok !== false, ...result }
     },
     remove: (host) => host.transport === 'ssh' ? ssh.remove(host) : undefined,
     dispose: () => ssh.dispose(),

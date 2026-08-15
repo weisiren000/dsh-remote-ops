@@ -85,7 +85,7 @@ test('回环可配对，列表不含 token，非回环拒绝', async () => {
   }
 })
 
-test('可改审批、切目标、删除本机记录', async () => {
+test('可改显示名、切目标、删除本机记录', async () => {
   const { hostd, handle } = await boot()
   try {
     const paired = mockRes()
@@ -100,9 +100,8 @@ test('可改审批、切目标、删除本机记录', async () => {
     await handle(mockReq({
       method: 'POST',
       url: `/remote-ops/v1/hosts/${hostId}`,
-      body: { approval_override: 'ask', display_name: 'prod' },
+      body: { display_name: 'prod' },
     }), updated)
-    assert.equal(updated.body.approval_override, 'ask')
     assert.equal(updated.body.display_name, 'prod')
 
     const used = mockRes()

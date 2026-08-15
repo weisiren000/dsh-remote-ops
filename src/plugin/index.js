@@ -24,36 +24,19 @@ export async function apply(ctx, config = {}) {
   const runner = createRunner({
     store,
     client,
-    ask: async (reason) => {
-      const approval = ctx.get?.('approval')
-      if (!approval?.request) return 'unavailable'
-      return approval.request({
-        agent: ctx.agent,
-        toolName: 'host_bash',
-        reason,
-      })
-    },
   })
   registerHostTools({
     tools: ctx.tools,
     systemPrompt: ctx.systemPrompt,
     runner,
     jobs: ctx.get?.('jobs'),
-    onPreExecute(fn) {
-      ctx.on?.('tools/pre-execute', async (exec, next) => {
-        if (exec.name !== 'host_bash') return next()
-        const decision = await fn(exec)
-        if (decision.kind === 'ask') return decision
-        return next()
-      })
-    },
   })
   let heartbeatRunning = false
   const timer = setInterval(async () => {
     if (heartbeatRunning) return
     heartbeatRunning = true
     try {
-      await runner.list()
+      await runner.refreshHosts()
     } catch {
       // The settings panel will display the last persisted state while a host is offline.
     } finally {

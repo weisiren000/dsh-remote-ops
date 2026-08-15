@@ -1,5 +1,4 @@
 const PREFIX = '/remote-ops/v1'
-const APPROVAL_OVERRIDES = new Set(['follow', 'auto', 'ask'])
 
 export function isLoopbackAddress(address) {
   return address === '127.0.0.1'
@@ -34,11 +33,25 @@ function publicJob(job, log) {
     started_at: job.startedAt,
     finished_at: job.finishedAt ?? null,
     approval_denied: job.approvalDenied === true,
+    error_code: job.errorCode ?? null,
+    error_message: job.errorMessage ?? null,
+    canceled_at: job.canceledAt ?? null,
+    cancel_supported: job.cancelSupported,
     log: log ?? undefined,
   }
 }
 
-function publicHost(host, currentHostId) {
+function formatDuration(startedAt, now = Date.now()) {
+  if (!startedAt) return undefined
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000))
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟`
+  const hours = Math.floor(minutes / 60)
+  return `${hours} 小时 ${minutes % 60} 分钟`
+}
+
+function publicHost(host, currentHostId, taskStats = {}) {
   return {
     host_id: host.hostId,
     display_name: host.displayName,
@@ -52,9 +65,24 @@ function publicHost(host, currentHostId) {
     os: host.os,
     dialect: host.dialect,
     last_heartbeat_at: host.lastHeartbeatAt,
-    approval_override: host.approvalOverride,
+    status: host.status ?? (host.online === false ? 'offline' : 'online'),
+    latency_ms: host.latencyMs,
+    last_error: host.lastError,
+    last_error_at: host.lastErrorAt,
+    connection_started_at: host.connectionStartedAt,
+    task_stats: host.taskStats,
+    connection_duration: formatDuration(host.connectionStartedAt),
+    task_stats: taskStats,
     current: host.hostId === currentHostId,
   }
+}
+
+function summarizeJobs(jobs) {
+  const stats = { running: 0, succeeded: 0, failed: 0, timed_out: 0, canceled: 0, interrupted: 0 }
+  for (const job of jobs) {
+    if (Object.hasOwn(stats, job.status)) stats[job.status] += 1
+  }
+  return stats
 }
 
 function matchRoute(method, pathname) {
@@ -63,6 +91,12 @@ function matchRoute(method, pathname) {
   if (method === 'POST' && pathname === '/hosts/pair') return { name: 'pair' }
   const use = /^\/hosts\/([^/]+)\/use$/.exec(pathname)
   if (method === 'POST' && use) return { name: 'use', hostId: decodeURIComponent(use[1]) }
+  const reconnect = /^\/hosts\/([^/]+)\/reconnect$/.exec(pathname)
+  if (method === 'POST' && reconnect) return { name: 'reconnect', hostId: decodeURIComponent(reconnect[1]) }
+  const diagnose = /^\/hosts\/([^/]+)\/diagnose$/.exec(pathname)
+  if (method === 'POST' && diagnose) return { name: 'diagnose', hostId: decodeURIComponent(diagnose[1]) }
+  const health = /^\/hosts\/([^/]+)\/health$/.exec(pathname)
+  if (method === 'GET' && health) return { name: 'health', hostId: decodeURIComponent(health[1]) }
   const jobs = /^\/hosts\/([^/]+)\/jobs$/.exec(pathname)
   if (method === 'GET' && jobs) return { name: 'hostJobs', hostId: decodeURIComponent(jobs[1]) }
   const host = /^\/hosts\/([^/]+)$/.exec(pathname)
@@ -70,6 +104,10 @@ function matchRoute(method, pathname) {
   if (host && method === 'DELETE') return { name: 'remove', hostId: decodeURIComponent(host[1]) }
   const job = /^\/jobs\/([^/]+)$/.exec(pathname)
   if (method === 'GET' && job) return { name: 'job', jobId: decodeURIComponent(job[1]) }
+  const cancel = /^\/jobs\/([^/]+)\/cancel$/.exec(pathname)
+  if (method === 'POST' && cancel) return { name: 'cancel', jobId: decodeURIComponent(cancel[1]) }
+  const log = /^\/jobs\/([^/]+)\/log$/.exec(pathname)
+  if (method === 'GET' && log) return { name: 'log', jobId: decodeURIComponent(log[1]) }
   return null
 }
 
@@ -91,9 +129,13 @@ export function createHostApiHandler({ runner }) {
     try {
       if (route.name === 'list') {
         const hosts = await runner.list()
-        const current = runner.getCurrentHost()
+        const current = runner.getCurrentHost?.()
         json(res, 200, {
-          hosts: hosts.map((host) => publicHost(host, current?.hostId)),
+          hosts: hosts.map((host) => publicHost(
+            host,
+            current?.hostId,
+            summarizeJobs(runner.listJobs({ hostId: host.hostId })),
+          )),
           current_host_id: current?.hostId ?? null,
         })
         return
@@ -129,15 +171,27 @@ export function createHostApiHandler({ runner }) {
         json(res, 200, publicHost(host, host.hostId))
         return
       }
+      if (route.name === 'reconnect') {
+        const body = await readJson(req)
+        const host = await runner.reconnectHost(route.hostId, {
+          hostFingerprint: body.host_fingerprint,
+        })
+        const current = runner.getCurrentHost?.()
+        json(res, 200, publicHost(host, current?.hostId))
+        return
+      }
+      if (route.name === 'diagnose') {
+        json(res, 200, await runner.diagnoseHost(route.hostId))
+        return
+      }
+      if (route.name === 'health') {
+        json(res, 200, await runner.healthHost(route.hostId))
+        return
+      }
       if (route.name === 'update') {
         const body = await readJson(req)
-        if (body.approval_override && !APPROVAL_OVERRIDES.has(body.approval_override)) {
-          json(res, 400, { error: 'invalid approval_override', code: 'INVALID_APPROVAL' })
-          return
-        }
         const host = await runner.updateHost(route.hostId, {
           displayName: body.display_name,
-          approvalOverride: body.approval_override,
         })
         const current = runner.getCurrentHost()
         json(res, 200, publicHost(host, current?.hostId))
@@ -149,21 +203,35 @@ export function createHostApiHandler({ runner }) {
         return
       }
       if (route.name === 'hostJobs') {
-        const jobs = runner.listJobs({ hostId: route.hostId, limit: 20 })
+        const status = url.searchParams.get('status') || undefined
+        const since = url.searchParams.get('since') || undefined
+        const until = url.searchParams.get('until') || undefined
+        const jobs = runner.listJobs({ hostId: route.hostId, status, since, until, limit: 20 })
         json(res, 200, { jobs: jobs.map((job) => publicJob(job)) })
         return
       }
       if (route.name === 'job') {
         const job = await runner.readJob(route.jobId)
         json(res, 200, publicJob(job, job.log))
+        return
+      }
+      if (route.name === 'cancel') {
+        const result = await runner.cancelJob(route.jobId)
+        json(res, 200, publicJob(result))
+        return
+      }
+      if (route.name === 'log') {
+        const tail = Math.min(1_000_000, Math.max(1, Number(url.searchParams.get('tail') ?? 8192)))
+        const result = await runner.readJobLogTail(route.jobId, tail)
+        json(res, 200, publicJob(result, result.log))
       }
     } catch (error) {
       const code = error?.code ?? 'REMOTE_OPS_ERROR'
-      const status = code === 'HOST_NOT_FOUND'
+      const status = code === 'HOST_NOT_FOUND' || code === 'JOB_NOT_FOUND'
         ? 404
-        : code === 'HOST_KEY_UNTRUSTED'
+        : code === 'HOST_KEY_UNTRUSTED' || code === 'HOST_KEY_CHANGED'
           ? 409
-          : code === 'SSH_CONNECT_FAILED'
+          : code === 'SSH_CONNECT_FAILED' || code === 'SSH_AUTH_FAILED'
             ? 401
             : 400
       json(res, status, {

@@ -1,5 +1,4 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { classifyCommand } from '../controller/approval.js'
 import { presentHostCall, presentHostResult, renderExecResult } from './render.js'
 
 const JOB_STATUSES = [
@@ -49,6 +48,30 @@ function toJobOutput(job) {
   }
 }
 
+function readBackgroundJob(jobs, jobId, owner, meta) {
+  const read = jobs.read(jobId, owner)
+  const snapshot = read.snapshot ?? {}
+  const status = snapshot.status === 'completed'
+    ? 'succeeded'
+    : snapshot.status === 'killed'
+      ? 'canceled'
+      : snapshot.status === 'failed'
+        ? 'failed'
+        : 'running'
+  return {
+    jobId,
+    hostId: meta.hostId,
+    command: meta.command,
+    description: meta.description,
+    status,
+    startedAt: meta.startedAt,
+    ...(snapshot.finishedAt !== undefined ? { finishedAt: snapshot.finishedAt } : {}),
+    approvalDenied: false,
+    ...(read.text ? { log: read.text } : {}),
+    ...(snapshot.detail ? { errorMessage: snapshot.detail } : {}),
+  }
+}
+
 function codedError(code, message) {
   const error = new Error(message)
   error.code = code
@@ -83,6 +106,7 @@ function toolError(error) {
 
 export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExecute }) {
   const register = (definition) => tools.register(defineTool(definition))
+  const backgroundMeta = new Map()
 
   if (systemPrompt?.section) {
     systemPrompt.section({
@@ -91,16 +115,6 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
       text: 'Check [exit code: N], [timed out], [canceled], and [interrupted] on host_bash results. Do not retarget an offline host.',
     })
   }
-
-  const preExecute = async (exec) => {
-    if (exec.name !== 'host_bash') return { kind: 'allow' }
-    const command = exec.arguments?.command ?? ''
-    if (classifyCommand(command) === 'ask') {
-      return { kind: 'ask', reason: 'remote command requires approval' }
-    }
-    return { kind: 'allow' }
-  }
-  onPreExecute?.(preExecute)
 
   register({
     name: 'host_pair',
@@ -231,7 +245,7 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
           const jobId = jobs.start({
             kind: 'host-bash',
             label: args.description,
-            owner: exec.agent,
+            ...(exec.agent ? { owner: exec.agent } : {}),
             run() {
               const controller = new AbortController()
               const done = runner.exec({
@@ -246,9 +260,19 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
                 cancel() {
                   controller.abort()
                 },
-                done,
+                done: done.then((result) => ({
+                  status: result.status === 'succeeded' ? 'completed' : result.status === 'canceled' ? 'killed' : 'failed',
+                  output: renderExecResult({ ...result, stdout: result.log ?? result.stdout ?? '' }),
+                  ...(result.errorMessage ? { detail: result.errorMessage } : {}),
+                })),
               }
             },
+          })
+          backgroundMeta.set(jobId, {
+            hostId: host.hostId,
+            command: args.command,
+            description: args.description,
+            startedAt: Date.now(),
           })
           return { job_id: jobId }
         }
@@ -282,8 +306,15 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
       schema: { oneOf: [JOB_SCHEMA, { type: 'array', items: JOB_SCHEMA }] },
       render: renderJson,
     },
-    async execute(args) {
-      if (args.job_id) return toJobOutput(await runner.readJob(args.job_id))
+    async execute(args, exec) {
+      if (args.job_id) {
+        try {
+          return toJobOutput(await runner.readJob(args.job_id))
+        } catch (error) {
+          if (!jobs?.read || !backgroundMeta.has(args.job_id)) throw error
+          return toJobOutput(await readBackgroundJob(jobs, args.job_id, exec?.agent, backgroundMeta.get(args.job_id)))
+        }
+      }
       return runner.listJobs({ hostId: args.host, limit: args.limit }).map(toJobOutput)
     },
   })
@@ -294,8 +325,13 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
       job_id: { type: 'string', required: true, description: 'Remote job id.' },
     },
     output: { schema: JOB_SCHEMA, render: renderJson },
-    async execute(args) {
-      return toJobOutput(await runner.readJob(args.job_id))
+    async execute(args, exec) {
+      try {
+        return toJobOutput(await runner.readJob(args.job_id))
+      } catch (error) {
+        if (!jobs?.read || !backgroundMeta.has(args.job_id)) throw error
+        return toJobOutput(await readBackgroundJob(jobs, args.job_id, exec?.agent, backgroundMeta.get(args.job_id)))
+      }
     },
   })
 }

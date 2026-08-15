@@ -12,8 +12,7 @@ jobs.json
 *.log
 
 # Local configuration and editor files
-.env
-.env.*
+.env*
 !.env.example
 .DS_Store
 

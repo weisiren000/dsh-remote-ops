@@ -66,24 +66,22 @@ test('两台机器并行执行日志不串，离线不改打另一台', async ()
   }
 })
 
-test('审批拒绝时远端文件不会被创建', async () => {
+test('远程命令不再被插件自定义审批分类拦截', async () => {
   const hostd = await bootHostd()
   const { store } = await bootRunner()
   const marker = path.join(hostd.dataDir ?? os.tmpdir(), `denied-${Date.now()}.txt`)
   const asking = createRunner({
     store,
     client: createHostClient({ allowInsecureLoopback: true }),
-    ask: async () => 'rejected',
   })
   try {
     const host = await asking.pair({ address: hostd.url, pairingCode: hostd.pairingCode })
-    await store.upsertHost({ ...store.getHost(host.hostId), approvalOverride: 'ask' })
     const command = host.dialect === 'pwsh'
       ? `Set-Content -Path '${marker}' -Value denied`
       : `printf denied > '${marker}'`
-    const result = await asking.exec({ command, description: 'should not run' })
-    assert.equal(result.approvalDenied, true)
-    await assert.rejects(() => fs.access(marker))
+    const result = await asking.exec({ command, description: 'should run' })
+    assert.equal(result.status, 'succeeded')
+    await fs.access(marker)
   } finally {
     await hostd.close()
   }

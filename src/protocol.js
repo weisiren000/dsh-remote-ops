@@ -13,7 +13,11 @@ export function toWireHost(host) {
     os: host.os,
     dialect: host.dialect,
     last_heartbeat_at: host.lastHeartbeatAt,
-    approval_override: host.approvalOverride,
+    status: host.status,
+    last_error: host.lastError,
+    last_error_at: host.lastErrorAt,
+    latency_ms: host.latencyMs,
+    connection_started_at: host.connectionStartedAt,
   }
 }
 
@@ -27,6 +31,10 @@ export function fromWireHost(payload) {
     os: payload.os,
     dialect: payload.dialect,
     lastHeartbeatAt: payload.last_heartbeat_at,
-    approvalOverride: payload.approval_override,
+    status: payload.status,
+    lastError: payload.last_error,
+    lastErrorAt: payload.last_error_at,
+    latencyMs: payload.latency_ms,
+    connectionStartedAt: payload.connection_started_at,
   }
 }
