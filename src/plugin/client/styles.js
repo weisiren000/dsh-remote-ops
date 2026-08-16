@@ -1,8 +1,7 @@
 export const CSS = `
-  .remoteWorkspace, .remoteWorkspace__launcher { --ro-bg: var(--dsw-alias-bg-base, #181818); --ro-panel: var(--dsw-alias-bg-layer-2, #202020); --ro-panel-2: var(--dsw-alias-bg-layer-3, #272727); --ro-line: var(--dsw-alias-border-l2, #303030); --ro-text: var(--dsw-alias-label-primary, #ededed); --ro-muted: var(--dsw-alias-label-secondary, #a2a2a2); --ro-dim: var(--dsw-alias-label-tertiary, #707070); --ro-accent: var(--dsw-alias-brand-primary, #4da1ff); --ro-danger: var(--dsw-alias-state-error-primary, #ee7d87); --ro-success: var(--dsw-alias-state-success-primary, #69cf97); color: var(--ro-text); }
-  .remoteOps { --ro-bg: var(--dsw-alias-bg-module-platform, #fff); --ro-panel: var(--dsw-alias-bg-layer-2, #f7f7f7); --ro-panel-2: var(--dsw-alias-bg-layer-3, #ededed); --ro-line: var(--dsw-alias-border-l2, #dedede); --ro-text: var(--dsw-alias-label-primary, #202020); --ro-muted: var(--dsw-alias-label-secondary, #666); --ro-dim: var(--dsw-alias-label-tertiary, #888); --ro-accent: var(--dsw-alias-brand-primary, #4d6bfe); --ro-danger: var(--dsw-alias-state-error-primary, #d54941); --ro-success: var(--dsw-alias-state-success-primary, #1f9d61); color: var(--ro-text); }
+  .remoteWorkspace, .remoteWorkspace__launcher, .remoteOps { --ro-bg: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, #fff)); --ro-panel: var(--dsw-alias-bg-module-platform, #f5f6f7); --ro-panel-2: var(--dsw-alias-interactive-bg-hover-solid, #f1f3f5); --ro-active: var(--dsw-alias-button-ghost-active-fill, #ebeef2); --ro-hover: var(--dsw-alias-interactive-bg-hover, rgba(38,49,72,.06)); --ro-code-bg: var(--dsw-alias-markdown-code-block, #f9fafb); --ro-menu-bg: var(--dsw-specific-menu, var(--ro-bg)); --ro-input-bg: var(--dsw-specific-input-major, var(--ro-bg)); --ro-line: var(--dsw-alias-border-l2, rgba(0,0,0,.1)); --ro-text: var(--dsw-alias-label-primary, #0f1115); --ro-muted: var(--dsw-alias-label-secondary, #61666b); --ro-dim: var(--dsw-alias-label-tertiary, #81858c); --ro-accent: var(--dsw-alias-state-business-primary, #4176e6); --ro-danger: var(--dsw-alias-state-error-primary, #ec1313); --ro-success: var(--dsw-alias-state-success-primary, #22c55e); color: var(--ro-text); }
   .remoteOps * , .remoteWorkspace * { box-sizing: border-box; }
-  .remoteWorkspace { background: var(--ro-bg); border-left: 1px solid var(--ro-line); color-scheme: light dark; display: flex; flex-direction: column; height: 100vh; inset: 0 0 0 var(--ro-workspace-left, 50vw); min-width: 300px; position: fixed; z-index: 21; }
+  .remoteWorkspace { background: var(--ro-bg); border-left: 1px solid var(--ro-line); color-scheme: light dark; display: flex; flex-direction: column; height: 100vh; inset: 0 0 0 var(--ro-workspace-left, 50vw); min-width: 300px; position: fixed; z-index: 2; }
   .remoteWorkspace__head { align-items: center; background: var(--ro-bg); border-bottom: 1px solid var(--ro-line); display: flex; height: 44px; justify-content: space-between; padding: 0 12px 0 16px; }
   .remoteWorkspace__identity { align-items: center; display: flex; gap: 9px; min-width: 0; }
   .remoteWorkspace__title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -12,7 +11,7 @@ export const CSS = `
   .remoteWorkspace__launcherButton, .remoteWorkspace__headButton { height: 30px; }
   .remoteWorkspace__saveButton { min-width: 74px; }
   .remoteWorkspace__port, .remoteOps__port { min-width: 0; }
-  .remoteWorkspace__button:hover:not(:disabled), .remoteWorkspace__button[data-active='true'] { background: var(--ro-panel-2); color: var(--ro-text); }
+  .remoteWorkspace__button:hover:not(:disabled), .remoteWorkspace__button[data-active='true'] { background: var(--ro-hover); color: var(--ro-text); }
   .remoteWorkspace__button:disabled { cursor: default; opacity: .45; }
   .remoteWorkspace__workspace { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr) 5px var(--ro-explorer-width, 320px); min-height: 0; }
   .remoteWorkspace__workspaceSplitter { background: transparent; bottom: 0; cursor: col-resize; left: -3px; position: absolute; top: 0; touch-action: none; width: 7px; z-index: 2; }
@@ -20,17 +19,21 @@ export const CSS = `
   .remoteWorkspace__explorerSplitter { background: var(--ro-line); cursor: col-resize; min-width: 5px; touch-action: none; }
   .remoteWorkspace__explorerSplitter:hover { background: var(--ro-accent); }
   .remoteWorkspace__main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-  .remoteWorkspace__tabs { align-items: center; background: var(--ro-panel); border-bottom: 1px solid var(--ro-line); display: flex; gap: 4px; height: 46px; overflow-x: auto; padding: 0 10px; }
+  .remoteWorkspace__tabs { align-items: center; background: var(--ro-bg); border-bottom: 1px solid var(--ro-line); display: flex; gap: 4px; height: 46px; overflow-x: auto; padding: 0 10px; }
   .remoteWorkspace__tab { align-items: center; background: transparent; border: 1px solid transparent; border-radius: 7px; color: var(--ro-muted); cursor: pointer; display: inline-flex; font: inherit; font-size: 12px; gap: 7px; height: 34px; padding: 0 12px; white-space: nowrap; }
-  .remoteWorkspace__tab:hover { background: var(--ro-panel-2); color: var(--ro-text); }
-  .remoteWorkspace__tab[data-active='true'] { background: var(--ro-panel-2); border-color: var(--ro-line); color: var(--ro-text); }
+  .remoteWorkspace__tab:hover { background: var(--ro-hover); color: var(--ro-text); }
+  .remoteWorkspace__tab[data-active='true'] { background: var(--ro-active); border-color: transparent; color: var(--ro-text); }
   .remoteWorkspace__view { display: flex; flex: 1; min-height: 0; }
   .remoteWorkspace__editor, .remoteWorkspace__terminal, .remoteWorkspace__changes { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
   .remoteWorkspace__editorbar { align-items: center; border-bottom: 1px solid var(--ro-line); display: flex; height: 40px; justify-content: space-between; padding: 0 14px; }
   .remoteWorkspace__editorPath { color: var(--ro-muted); font: 12px ui-monospace, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .remoteWorkspace__editorGrid { display: grid; flex: 1; grid-template-columns: 46px minmax(0, 1fr); min-height: 0; }
-  .remoteWorkspace__lineNumbers { background: var(--ro-panel); color: var(--ro-dim); font: 13px/1.7 ui-monospace, Consolas, monospace; margin: 0; overflow: hidden; padding: 16px 10px 16px 0; text-align: right; user-select: none; }
-  .remoteWorkspace__editor textarea { background: transparent; border: 0; color: var(--ro-text); font: 13px/1.7 ui-monospace, Consolas, monospace; min-height: 0; outline: none; padding: 16px 20px; resize: none; tab-size: 2; white-space: pre; }
+  .remoteWorkspace__editorActions { align-items: center; display: flex; flex: none; gap: 6px; }
+  .remoteWorkspace__editorTextArea { background: var(--ro-code-bg); border: 0; color: var(--ro-text); flex: 1; font: var(--dsw-font-markdown-code-block, 13px/22px ui-monospace, Consolas, monospace); min-height: 0; outline: none; overflow: auto; overflow-wrap: anywhere; padding: 16px 20px; resize: none; tab-size: 2; white-space: pre-wrap; word-break: break-word; }
+  .remoteWorkspace__codeView { background: var(--ro-code-bg); border: 0 !important; border-radius: 0 !important; flex: 1; margin: 0 !important; min-height: 0; overflow: auto; }
+  .remoteWorkspace__codeView > div:nth-child(2) { overflow: visible !important; }
+  .remoteWorkspace__codeView > div:nth-child(2) > div { align-items: start; min-width: 0; }
+  .remoteWorkspace__codeView > div:nth-child(2) > div > span:last-child { overflow-wrap: anywhere; white-space: pre-wrap !important; word-break: break-word; }
+  .remoteWorkspace__codeFallback { background: var(--ro-code-bg); color: var(--ro-text); flex: 1; font: var(--dsw-font-markdown-code-block, 13px/22px ui-monospace, Consolas, monospace); margin: 0; overflow: auto; overflow-wrap: anywhere; padding: 16px 20px; white-space: pre-wrap; word-break: break-word; }
   .remoteWorkspace__editorFooter { align-items: center; border-top: 1px solid var(--ro-line); color: var(--ro-dim); display: flex; font-size: 11px; gap: 14px; height: 28px; padding: 0 14px; }
   .remoteWorkspace__dirty { color: #e5b96b; font-size: 11px; }
   .remoteWorkspace__empty { align-items: center; color: var(--ro-dim); display: flex; flex: 1; flex-direction: column; font-size: 12px; gap: 10px; justify-content: center; }
@@ -38,13 +41,13 @@ export const CSS = `
   .remoteWorkspace__explorerHead { align-items: center; border-bottom: 1px solid var(--ro-line); display: flex; height: 42px; justify-content: space-between; padding: 0 10px 0 14px; }
   .remoteWorkspace__label { color: var(--ro-muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
   .remoteWorkspace__search { border-bottom: 1px solid var(--ro-line); padding: 9px 10px; }
-  .remoteWorkspace__searchInput { background: var(--ro-bg) !important; border-color: var(--ro-line) !important; color: var(--ro-text) !important; width: 100%; }
+  .remoteWorkspace__searchInput { background: var(--ro-input-bg) !important; border-color: var(--ro-line) !important; color: var(--ro-text) !important; width: 100%; }
   .remoteWorkspace__searchInput input { background: transparent !important; color: var(--ro-text) !important; font: 12px ui-monospace, Consolas, monospace; }
   .remoteWorkspace__searchInput input::placeholder { color: var(--ro-dim); }
   .remoteWorkspace__iconButton { min-width: 28px; padding: 0 !important; }
   .remoteWorkspace__tree { min-height: 0; overflow: auto; padding: 7px 6px 18px; }
   .remoteWorkspace__treeEntry { align-items: center; background: transparent; border: 0; color: var(--ro-muted); cursor: pointer; display: flex; font: 12px/28px ui-monospace, Consolas, monospace; height: 28px; min-width: 0; padding: 0 6px; text-align: left; width: 100%; }
-  .remoteWorkspace__treeEntry:hover, .remoteWorkspace__treeEntry[data-active='true'] { background: var(--ro-panel-2); color: var(--ro-text); }
+  .remoteWorkspace__treeEntry:hover, .remoteWorkspace__treeEntry[data-active='true'] { background: var(--ro-hover); color: var(--ro-text); }
   .remoteWorkspace__treeChevron { color: var(--ro-dim); flex: none; font-family: sans-serif; text-align: center; width: 17px; }
   .remoteWorkspace__treeName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .remoteWorkspace__treeMessage { color: var(--ro-dim); font-size: 12px; padding: 8px; }
@@ -53,23 +56,24 @@ export const CSS = `
   .remoteWorkspace__terminalbar { align-items: center; display: flex; flex: none; gap: 8px; margin-top: 5px; min-height: 24px; }
   .remoteWorkspace__terminalPrompt { color: #75d19a; white-space: nowrap; }
   .remoteWorkspace__input { background: transparent; border: 0; color: inherit; flex: 1; font: inherit; min-width: 0; outline: none; }
-  .remoteWorkspace__changes { gap: 1px; overflow: auto; padding: 10px 14px; }
-  .remoteWorkspace__change { border-bottom: 1px solid var(--ro-line); display: flex; gap: 12px; justify-content: space-between; padding: 11px 0; }
+  .remoteWorkspace__changes { gap: 0; overflow: auto; padding: 0 14px 20px; }
+  .remoteWorkspace__change { border-bottom: 1px solid var(--ro-line); display: block; padding: 14px 0; }
+  .remoteWorkspace__changeHead { align-items: center; display: flex; gap: 12px; justify-content: space-between; margin-bottom: 10px; }
   .remoteWorkspace__changeMain { min-width: 0; }
-  .remoteWorkspace__changePath { background: transparent; border: 0; color: var(--ro-text); cursor: pointer; font: 12px ui-monospace, Consolas, monospace; max-width: 100%; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+  .remoteWorkspace__changePath { color: var(--ro-text); font: 12px ui-monospace, Consolas, monospace; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .remoteWorkspace__changeMeta { color: var(--ro-muted); display: block; font-size: 11px; margin-top: 4px; }
   .remoteWorkspace__changeActions { display: flex; flex: none; gap: 4px; }
-  .remoteWorkspace__changePreview { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; margin-top: 9px; }
-  .remoteWorkspace__changePreview pre { background: var(--ro-bg); border: 1px solid var(--ro-line); font: 11px/1.45 ui-monospace, Consolas, monospace; margin: 4px 0 0; max-height: 220px; overflow: auto; padding: 8px; white-space: pre-wrap; }
+  .remoteWorkspace__nativeDiff { margin: 0; max-width: 100%; overflow: hidden; }
+  .remoteWorkspace__diffFallback { background: var(--ro-code-bg); border: 1px solid var(--ro-line); font: 11px/1.45 ui-monospace, Consolas, monospace; margin: 0; max-height: 260px; overflow: auto; overflow-wrap: anywhere; padding: 10px; white-space: pre-wrap; word-break: break-word; }
   .remoteWorkspace__error { background: #3a2024; border-bottom: 1px solid #63343c; color: #ffabb2; font-size: 12px; padding: 8px 14px; }
-  .remoteWorkspace__launcher { display: inline-flex; position: relative; z-index: 1101; }
-  .remoteWorkspace__serverMenu { background: var(--ro-bg); border: 1px solid var(--ro-line); border-radius: 8px; box-shadow: 0 4px 12px rgba(15,17,21,.08); color: var(--ro-text); display: flex; flex-direction: column; gap: 2px; min-width: 250px; padding: 6px; position: absolute; right: 0; top: calc(100% + 8px); z-index: 1200; }
+  .remoteWorkspace__launcher { display: inline-flex; position: relative; z-index: 19; }
+  .remoteWorkspace__serverMenu { background: var(--ro-menu-bg); border: 1px solid var(--ro-line); border-radius: 8px; box-shadow: var(--dsw-shadow-lv2, 0 2px 8px rgba(0,0,0,.06)); color: var(--ro-text); display: flex; flex-direction: column; gap: 2px; min-width: 250px; padding: 6px; position: absolute; right: 0; top: calc(100% + 8px); z-index: 3; }
   .remoteWorkspace__serverOption { background: transparent; border: 0; color: var(--ro-muted); cursor: pointer; display: flex; justify-content: space-between; padding: 9px; text-align: left; width: 100%; }
-  .remoteWorkspace__serverOption:hover { background: var(--ro-panel-2); color: var(--ro-text); }
+  .remoteWorkspace__serverOption:hover { background: var(--ro-hover); color: var(--ro-text); }
   .remoteWorkspace__serverStatus { color: var(--ro-dim); font-size: 11px; }
   @media (max-width: 1100px) { .remoteWorkspace { inset: 0 0 0 max(280px, var(--ro-workspace-left, 50vw)); } .remoteWorkspace__workspace { grid-template-columns: minmax(0, 1fr) 5px minmax(220px, var(--ro-explorer-width, 250px)); } }
   @media (max-width: 760px) { .remoteWorkspace { inset: 0; } }
-  @media (max-width: 620px) { .remoteWorkspace__explorer { display: none; } .remoteWorkspace__changePreview { grid-template-columns: 1fr; } }
+  @media (max-width: 620px) { .remoteWorkspace__explorer { display: none; } }
   .remoteOps { display: flex; flex-direction: column; gap: 20px; max-width: 920px; padding: 4px 0 30px; }
   .remoteOps__settingsHead, .remoteOps__hostCardHead, .remoteOps__hostActions, .remoteOps__sectionTitle { align-items: center; display: flex; justify-content: space-between; gap: 12px; }
   .remoteOps__settingsHead h2 { font-size: 18px; margin: 0; }

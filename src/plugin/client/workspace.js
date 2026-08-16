@@ -8,20 +8,44 @@ function hostLabel(host) {
   return `${status}${latency}`
 }
 
+// 资源管理器保持目录优先，并按文件名进行自然排序。
+function sortDirectoryEntries(entries = []) {
+  return [...entries].sort((left, right) => {
+    const leftDirectory = directoryEntry(left)
+    const rightDirectory = directoryEntry(right)
+    if (leftDirectory !== rightDirectory) return leftDirectory ? -1 : 1
+    return String(left?.name ?? '').localeCompare(String(right?.name ?? ''), 'zh-CN', {
+      numeric: true,
+      sensitivity: 'base',
+    })
+  })
+}
+
+// DSH 的原生 ReadBlock 接受文件扩展名作为 Shiki 语言提示。
+function languageFromPath(path = '') {
+  const name = path.split(/[\\/]/).pop()?.toLocaleLowerCase() ?? ''
+  if (/^\.(bashrc|profile|zshrc|shrc)$/.test(name)) return 'shellscript'
+  const extension = name.includes('.') ? name.split('.').pop() : ''
+  return extension || undefined
+}
+
 export function createRemoteWorkspaceAction(React, api, icons = {}) {
   const { createElement: h, Fragment, useEffect, useMemo, useRef, useState } = React
   const {
     Button,
+    DiffBlock,
     Input,
     IconChevronDownOutline14,
     IconChevronRightOutline14,
     IconCheckOutline16,
     IconCloseOutline16,
     IconCodeOutline16,
+    IconEditOutline16,
     IconFolderClose16,
     IconFolderOpen16,
     IconRefreshOutline16,
     IconSearchOutline16,
+    ReadBlock,
   } = icons
   const icon = (Component, props = {}) => Component ? h(Component, { size: 14, ...props }) : null
   const button = (props, label) => h(Button || 'button', {
@@ -43,6 +67,7 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
     const [file, setFile] = useState(null)
     const [content, setContent] = useState('')
     const [savedContent, setSavedContent] = useState('')
+    const [editing, setEditing] = useState(false)
     const [view, setView] = useState('files')
     const [command, setCommand] = useState('')
     const [history, setHistory] = useState([])
@@ -50,7 +75,6 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
     const [output, setOutput] = useState('')
     const [running, setRunning] = useState(false)
     const [changes, setChanges] = useState([])
-    const [expandedChanges, setExpandedChanges] = useState({})
     const [treeFilter, setTreeFilter] = useState('')
     const [error, setError] = useState(null)
     const [workspaceLeft, setWorkspaceLeft] = useState(50)
@@ -59,6 +83,8 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
     const workspaceRef = useRef(null)
     const outputRef = useRef(null)
     const selectedHost = useMemo(() => hosts.find((host) => host.host_id === hostId), [hosts, hostId])
+    const fileLanguage = useMemo(() => languageFromPath(file?.path), [file?.path])
+    const fileLines = useMemo(() => content.split('\n').map((text, index) => ({ number: index + 1, text })), [content])
     const dirty = Boolean(file && content !== savedContent)
 
     const loadHosts = async () => {
@@ -90,6 +116,7 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
       setFile(null)
       setContent('')
       setSavedContent('')
+      setEditing(false)
       setOutput('')
       setTreeFilter('')
       setView('files')
@@ -109,6 +136,7 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
         setFile(result)
         setContent(result.content ?? '')
         setSavedContent(result.content ?? '')
+        setEditing(false)
         setView('files')
         setError(null)
       } catch (err) {
@@ -127,6 +155,7 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
         })
         setFile((current) => ({ ...current, version: result.after_version }))
         setSavedContent(content)
+        setEditing(false)
         await loadChanges()
         setError(null)
       } catch (err) {
@@ -230,7 +259,7 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
       dragRef.current = null
     }
 
-    const renderTree = (path, depth = 0) => (directories[path] ?? []).filter((entry) => {
+    const renderTree = (path, depth = 0) => sortDirectoryEntries(directories[path]).filter((entry) => {
       if (!treeFilter.trim()) return true
       return entry.name.toLocaleLowerCase().includes(treeFilter.trim().toLocaleLowerCase())
     }).map((entry) => {
@@ -245,23 +274,67 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
         folder && isOpen ? renderTree(entry.path, depth + 1) : null,
       )
     })
-    const renderChanges = changes.length ? changes.map((change) => {
-      const expandedChange = Boolean(expandedChanges[change.change_id])
-      return h('div', { className: 'remoteWorkspace__change', key: change.change_id },
+    const renderDiff = (change) => DiffBlock
+      ? h(DiffBlock, {
+        className: 'remoteWorkspace__nativeDiff',
+        diffs: [{
+          path: change.path,
+          oldText: change.before_content ?? null,
+          newText: change.after_content ?? '',
+        }],
+      })
+      : h('pre', { className: 'remoteWorkspace__diffFallback' }, `- ${change.before_content ?? ''}\n+ ${change.after_content ?? ''}`)
+    const renderChanges = changes.length ? changes.map((change) => h('article', { className: 'remoteWorkspace__change', key: change.change_id },
+      h('header', { className: 'remoteWorkspace__changeHead' },
         h('div', { className: 'remoteWorkspace__changeMain' },
-          h('button', { className: 'remoteWorkspace__changePath', type: 'button', onClick: () => setExpandedChanges((current) => ({ ...current, [change.change_id]: !expandedChange })) }, change.path),
+          h('div', { className: 'remoteWorkspace__changePath', title: change.path }, change.path),
           h('span', { className: 'remoteWorkspace__changeMeta' }, `${change.source || '插件'} · ${change.status}`),
-          expandedChange ? h('div', { className: 'remoteWorkspace__changePreview' },
-            h('div', null, h('span', { className: 'remoteWorkspace__changeMeta' }, '修改前'), h('pre', null, change.before_content ?? '(文件不存在)')),
-            h('div', null, h('span', { className: 'remoteWorkspace__changeMeta' }, '修改后'), h('pre', null, change.after_content ?? '')),
-          ) : null,
         ),
         h('div', { className: 'remoteWorkspace__changeActions' },
           h('button', { className: 'remoteWorkspace__button', type: 'button', onClick: () => review(change.change_id, 'accept') }, '接受'),
           h('button', { className: 'remoteWorkspace__button', type: 'button', onClick: () => review(change.change_id, 'revert') }, '撤销'),
         ),
+      ),
+      renderDiff(change),
+    )) : h('div', { className: 'remoteWorkspace__empty' }, '暂无待审阅变更')
+
+    const renderFile = () => {
+      if (!file) return h('div', { className: 'remoteWorkspace__empty' }, '未打开文件')
+      return h('section', { className: 'remoteWorkspace__editor' },
+        h('div', { className: 'remoteWorkspace__editorbar' },
+          h('span', { className: 'remoteWorkspace__editorPath', title: file.path }, file.path),
+          h('div', { className: 'remoteWorkspace__editorActions' },
+            editing
+              ? h('button', { className: 'remoteWorkspace__button', type: 'button', onClick: () => { setContent(savedContent); setEditing(false) } }, '取消')
+              : button({ className: 'remoteWorkspace__editButton', icon: icon(IconEditOutline16), onClick: () => setEditing(true) }, '编辑'),
+            editing ? button({ className: 'remoteWorkspace__saveButton', icon: icon(IconCheckOutline16), disabled: !dirty, onClick: save }, '保存') : null,
+          ),
+        ),
+        editing
+          ? h('textarea', {
+            className: 'remoteWorkspace__editorTextArea',
+            value: content,
+            spellCheck: false,
+            autoFocus: true,
+            'aria-label': `编辑 ${file.path}`,
+            onChange: (event) => setContent(event.target.value),
+          })
+          : ReadBlock
+            ? h(ReadBlock, {
+              className: 'remoteWorkspace__codeView',
+              label: file.path,
+              lang: fileLanguage,
+              lines: fileLines,
+              totalLines: fileLines.length,
+              maxLines: Math.max(fileLines.length, 1),
+            })
+            : h('pre', { className: 'remoteWorkspace__codeFallback' }, content),
+        h('footer', { className: 'remoteWorkspace__editorFooter' },
+          h('span', null, `${fileLines.length} 行`),
+          dirty ? h('span', { className: 'remoteWorkspace__dirty' }, '未保存') : h('span', null, editing ? '编辑中' : '只读预览'),
+        ),
       )
-    }) : h('div', { className: 'remoteWorkspace__empty' }, '暂无待审阅变更')
+    }
 
     return h('span', { className: 'remoteWorkspace__launcher' },
       button({ className: 'remoteWorkspace__launcherButton', title: '选择服务器并打开远程开发工作台', 'aria-label': '选择服务器并打开远程开发工作台', 'aria-expanded': menuOpen, onClick: () => setMenuOpen((current) => !current) }, '服务器'),
@@ -303,7 +376,7 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
                     },
                   }),
                 ),
-              ) : view === 'changes' ? h('section', { className: 'remoteWorkspace__changes' }, renderChanges) : file ? h('section', { className: 'remoteWorkspace__editor' }, h('div', { className: 'remoteWorkspace__editorbar' }, h('span', { className: 'remoteWorkspace__editorPath' }, file.path), button({ className: 'remoteWorkspace__saveButton', icon: icon(IconCheckOutline16), disabled: !dirty, onClick: save }, '保存')), h('div', { className: 'remoteWorkspace__editorGrid' }, h('pre', { className: 'remoteWorkspace__lineNumbers', 'aria-hidden': true }, content.split('\n').map((_, index) => `${index + 1}\n`).join('')), h('textarea', { value: content, spellCheck: false, 'aria-label': `编辑 ${file.path}`, onChange: (event) => setContent(event.target.value) })), h('footer', { className: 'remoteWorkspace__editorFooter' }, h('span', null, `${content.split('\n').length} 行`), dirty ? h('span', { className: 'remoteWorkspace__dirty' }, '未保存') : h('span', null, '已保存'))) : h('div', { className: 'remoteWorkspace__empty' }, '未打开文件'),
+              ) : view === 'changes' ? h('section', { className: 'remoteWorkspace__changes' }, renderChanges) : renderFile(),
             ),
           ),
           h('div', { className: 'remoteWorkspace__explorerSplitter', role: 'separator', 'aria-label': '调整资源管理器宽度', onPointerDown: (event) => beginResize('explorer', event), onPointerUp: endResize }),

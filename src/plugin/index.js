@@ -9,15 +9,17 @@ import { registerHostApi } from '../host-api.js'
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from '../protocol.js'
 
 export const name = 'remote-ops'
-export const inject = ['tools', 'systemPrompt']
+export const inject = ['tools', 'systemPrompt', 'webServer']
+
+const DEFAULT_DATA_DIR = path.join(os.homedir(), '.dsh', 'remote-ops')
 
 export const Config = z.object({
-  dataDir: z.string(),
-  heartbeatTimeoutMs: z.number().default(DEFAULT_HEARTBEAT_TIMEOUT_MS),
+  dataDir: z.string().default(DEFAULT_DATA_DIR),
+  heartbeatTimeoutMs: z.number().min(1000).default(DEFAULT_HEARTBEAT_TIMEOUT_MS),
 })
 
 export async function apply(ctx, config = {}) {
-  const dataDir = config.dataDir ?? path.join(os.homedir(), '.dsh', 'remote-ops')
+  const dataDir = config.dataDir ?? DEFAULT_DATA_DIR
   const heartbeatTimeoutMs = config.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS
   const store = await createControllerStore(dataDir)
   const client = createHostClient({ keysDir: path.join(dataDir, 'keys') })
@@ -43,15 +45,11 @@ export async function apply(ctx, config = {}) {
       heartbeatRunning = false
     }
   }, Math.max(1, Math.floor(heartbeatTimeoutMs / 3)))
-  let disposeRoute
-  ctx.inject?.(['webServer'], (webCtx) => {
-    disposeRoute = registerHostApi(webCtx.webServer, runner)
-  })
+  const disposeRoute = registerHostApi(ctx.webServer, runner)
   const dispose = () => {
     clearInterval(timer)
     client.dispose?.()
     disposeRoute?.()
   }
-  ctx.effect?.(() => dispose)
-  if (!ctx.effect) ctx.on?.('dispose', dispose)
+  ctx.effect(() => dispose)
 }

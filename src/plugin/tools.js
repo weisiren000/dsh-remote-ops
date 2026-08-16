@@ -28,6 +28,47 @@ const JOB_SCHEMA = {
   },
 }
 
+const FILE_ENTRY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', required: true },
+    path: { type: 'string', required: true },
+    type: { type: 'string', required: true, enum: ['file', 'directory'] },
+    size: { type: 'number' },
+    mtime: { type: 'number' },
+    mode: { type: 'integer' },
+  },
+}
+
+const CHANGE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    change_id: { type: 'string', required: true },
+    host_id: { type: 'string', required: true },
+    path: { type: 'string', required: true },
+    before_content: { type: 'string' },
+    after_content: { type: 'string' },
+    before_version: { type: 'string' },
+    after_version: { type: 'string' },
+    status: { type: 'string', required: true },
+    source: { type: 'string', required: true },
+    description: { type: 'string' },
+    created_at: { type: 'number', required: true },
+    updated_at: { type: 'number', required: true },
+  },
+}
+
+const REMOTE_TOOL_RULES = [
+  'Remote host tools are opt-in and must never be used by default.',
+  'For local workspace, repository, or code-change requests, use the host application local tools first (for example bash or str_replace_editor).',
+  'Only call host_* after the user explicitly asks for a remote/server/host operation, names a remote host, or opens the remote development workbench.',
+  'A local-tool failure or a Windows platform limitation is not permission to switch to host_*; report the local limitation instead.',
+  'Never probe drive letters, guessed directories, or remote hosts to recover from a local-tool failure.',
+  'Remote tools are for the paired host selected by the user; do not retarget another host implicitly.',
+].join(' ')
+
 function renderJson(_args, value) {
   return [{ type: 'text', text: JSON.stringify(value, null, 2) }]
 }
@@ -45,6 +86,34 @@ function toJobOutput(job) {
     ...(job.finishedAt !== undefined ? { finishedAt: job.finishedAt } : {}),
     ...(job.remoteJobId !== undefined ? { remoteJobId: job.remoteJobId } : {}),
     ...(job.log !== undefined ? { log: job.log } : {}),
+  }
+}
+
+function toFileEntry(entry) {
+  return {
+    name: entry.name,
+    path: entry.path,
+    type: entry.type,
+    ...(entry.size != null ? { size: entry.size } : {}),
+    ...(entry.mtime != null ? { mtime: entry.mtime } : {}),
+    ...(entry.mode != null ? { mode: entry.mode } : {}),
+  }
+}
+
+function toChangeOutput(change) {
+  return {
+    change_id: change.changeId,
+    host_id: change.hostId,
+    path: change.path,
+    ...(change.beforeContent != null ? { before_content: change.beforeContent } : {}),
+    ...(change.afterContent != null ? { after_content: change.afterContent } : {}),
+    ...(change.beforeVersion != null ? { before_version: change.beforeVersion } : {}),
+    ...(change.afterVersion != null ? { after_version: change.afterVersion } : {}),
+    status: change.status,
+    source: change.source,
+    ...(change.description != null ? { description: change.description } : {}),
+    created_at: change.createdAt,
+    updated_at: change.updatedAt,
   }
 }
 
@@ -120,15 +189,15 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
 
   if (systemPrompt?.section) {
     systemPrompt.section({
-      name: 'tool:host_bash',
+      name: 'tool:remote_ops',
       order: 106,
-      text: 'Check [exit code: N], [timed out], [canceled], and [interrupted] on host_bash results. Do not retarget an offline host.',
+      text: `${REMOTE_TOOL_RULES} Check [exit code: N], [timed out], [canceled], and [interrupted] on host_bash results.`,
     })
   }
 
   register({
     name: 'host_pair',
-    description: 'Pair a remote host with an address and one-time pairing code.',
+    description: 'Remote-only: pair a remote host with an address and one-time pairing code. Do not use for local workspace tasks.',
     parameters: {
       address: { type: 'string', required: true, description: 'Remote host URL.' },
       pairing_code: { type: 'string', required: true, description: 'One-time pairing code.' },
@@ -157,7 +226,7 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
   })
   register({
     name: 'host_list',
-    description: 'List paired hosts, online state, and the current target.',
+    description: 'Remote-only: list paired hosts, online state, and the current target. Do not use for local workspace tasks or after a local-tool failure.',
     parameters: {},
     output: {
       schema: {
@@ -191,7 +260,7 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
   })
   register({
     name: 'host_use',
-    description: 'Set the current remote target host.',
+    description: 'Remote-only: set the current remote target host after the user explicitly selects or names it.',
     parameters: {
       host: { type: 'string', required: true, description: 'Host id or unique display name.' },
     },
@@ -213,7 +282,7 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
   })
   register({
     name: 'host_bash',
-    description: 'Run one command on a paired host. Omit host to use the current target.',
+    description: 'Remote-only: run one command on a paired host. Use only when the user explicitly requests a remote/server operation; never substitute for local bash.',
     parameters: {
       command: { type: 'string', required: true, description: 'Command to execute remotely.' },
       description: { type: 'string', required: true, description: 'Short description shown in the UI.' },
@@ -306,7 +375,7 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
   })
   register({
     name: 'host_jobs',
-    description: 'List recent remote jobs by host or job id.',
+    description: 'Remote-only: list recent remote jobs by host or job id. Do not use for local task history.',
     parameters: {
       host: { type: 'string', description: 'Filter by host id.' },
       job_id: { type: 'string', description: 'Read one job instead of listing jobs.' },
@@ -330,7 +399,7 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
   })
   register({
     name: 'host_job_log',
-    description: 'Read one remote job log. Long logs are truncated with a file locator.',
+    description: 'Remote-only: read one remote job log. Long logs are truncated with a file locator.',
     parameters: {
       job_id: { type: 'string', required: true, description: 'Remote job id.' },
     },
@@ -346,16 +415,21 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
   })
   register({
     name: 'host_list_files',
-    description: 'List files and directories on a paired remote host.',
+    description: 'Remote-only: list files and directories on a paired remote host. Never use to inspect the local workspace.',
     parameters: {
       host: { type: 'string', description: 'Host id or unique display name.' },
       path: { type: 'string', description: 'Remote directory path.' },
     },
-    output: { schema: { type: 'object', additionalProperties: false, properties: { host_id: { type: 'string', required: true }, path: { type: 'string', required: true }, entries: { type: 'array', required: true } } }, render: renderJson },
+    output: { schema: { type: 'object', additionalProperties: false, properties: { host_id: { type: 'string', required: true }, path: { type: 'string', required: true }, entries: { type: 'array', required: true, items: FILE_ENTRY_SCHEMA } } }, render: renderJson },
     async execute(args) {
       try {
         const host = await requireHost(runner, args.host)
-        return runner.listFiles(host, args.path)
+        const result = await runner.listFiles(host, args.path)
+        return {
+          host_id: result.hostId,
+          path: result.path,
+          entries: result.entries.map(toFileEntry),
+        }
       } catch (error) {
         toolError(error)
       }
@@ -363,7 +437,7 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
   })
   register({
     name: 'host_read_file',
-    description: 'Read a UTF-8 text file from a paired remote host.',
+    description: 'Remote-only: read a UTF-8 text file from a paired remote host. Never use to inspect the local workspace.',
     parameters: {
       host: { type: 'string', description: 'Host id or unique display name.' },
       path: { type: 'string', required: true, description: 'Remote file path.' },
@@ -372,7 +446,13 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
     async execute(args) {
       try {
         const host = await requireHost(runner, args.host)
-        return runner.readRemoteFile(host, args.path)
+        const result = await runner.readRemoteFile(host, args.path)
+        return {
+          host_id: result.hostId,
+          path: result.path,
+          content: result.content,
+          version: result.version,
+        }
       } catch (error) {
         toolError(error)
       }
@@ -380,7 +460,7 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
   })
   register({
     name: 'host_write_file',
-    description: 'Write a complete UTF-8 text file on a paired remote host and create a reviewable change record.',
+    description: 'Remote-only: write a complete UTF-8 text file on a paired remote host and create a reviewable change record. Never use for local files.',
     parameters: {
       host: { type: 'string', description: 'Host id or unique display name.' },
       path: { type: 'string', required: true, description: 'Remote file path.' },
@@ -388,11 +468,12 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
       expected_version: { type: 'string', description: 'Version returned by host_read_file.' },
       description: { type: 'string', description: 'Reason for the change.' },
     },
-    output: { schema: { type: 'object', additionalProperties: false }, render: renderJson },
+    output: { schema: CHANGE_SCHEMA, render: renderJson },
     async execute(args) {
       try {
         const host = await requireHost(runner, args.host)
-        return runner.writeRemoteFile({ host, path: args.path, content: args.content, expectedVersion: args.expected_version, source: 'ai', description: args.description })
+        const change = await runner.writeRemoteFile({ host, path: args.path, content: args.content, expectedVersion: args.expected_version, source: 'ai', description: args.description })
+        return toChangeOutput(change)
       } catch (error) {
         toolError(error)
       }
@@ -400,7 +481,7 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
   })
   register({
     name: 'host_review_changes',
-    description: 'List remote file changes or apply an accept, revert, or restore review action.',
+    description: 'Remote-only: list remote file changes or apply an accept, revert, or restore review action. Never use for local repository changes.',
     parameters: {
       host: { type: 'string', description: 'Host id or unique display name.' },
       change_id: { type: 'string', description: 'Change id to review.' },
@@ -408,16 +489,31 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
       status: { type: 'string', enum: ['pending', 'accepted', 'reverted', 'restored'], description: 'Change status filter.' },
       limit: { type: 'integer', description: 'Maximum number of changes.' },
     },
-    output: { schema: { type: 'object', additionalProperties: false }, render: renderJson },
+    output: {
+      schema: {
+        oneOf: [
+          CHANGE_SCHEMA,
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              host_id: { type: 'string', required: true },
+              changes: { type: 'array', required: true, items: CHANGE_SCHEMA },
+            },
+          },
+        ],
+      },
+      render: renderJson,
+    },
     async execute(args) {
       try {
         if (args.change_id) {
           if (!args.action) throw codedError('CHANGE_ACTION_REQUIRED', 'action required when change_id is provided')
-          return runner.reviewChange(args.change_id, args.action)
+          return toChangeOutput(await runner.reviewChange(args.change_id, args.action))
         }
         const host = await requireHost(runner, args.host)
         const changes = runner.listChanges({ hostId: host, status: args.status, limit: args.limit })
-        return { host_id: host, changes }
+        return { host_id: host, changes: changes.map(toChangeOutput) }
       } catch (error) {
         toolError(error)
       }
