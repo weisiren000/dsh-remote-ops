@@ -2,10 +2,26 @@ function directoryEntry(entry) {
   return entry?.type === 'directory'
 }
 
-function hostLabel(host) {
+const LATENCY_FAST_MAX_MS = 100
+const LATENCY_MEDIUM_MAX_MS = 300
+
+export function latencyLevel(host) {
   const status = host?.status || (host?.online ? 'online' : 'offline')
-  const latency = host?.latency_ms == null ? '' : ` · ${Math.round(Number(host.latency_ms))} ms`
-  return `${status}${latency}`
+  const latency = Number(host?.latency_ms)
+  if (status !== 'online' || !Number.isFinite(latency) || host?.latency_ms == null) return 'unknown'
+  if (latency <= LATENCY_FAST_MAX_MS) return 'fast'
+  if (latency <= LATENCY_MEDIUM_MAX_MS) return 'medium'
+  return 'slow'
+}
+
+export function joinRemotePath(directory, fileName) {
+  const base = String(directory || '.')
+  const separator = base.includes('\\') && !base.includes('/') ? '\\' : '/'
+  return `${base.replace(/[\\/]$/, '')}${separator}${fileName}`
+}
+
+export function fileCanEdit(file) {
+  return Boolean(file?.path && !file.previewUnavailable)
 }
 
 // 资源管理器保持目录优先，并按文件名进行自然排序。
@@ -40,11 +56,13 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
     IconCheckOutline16,
     IconCloseOutline16,
     IconCodeOutline16,
+    IconDownloadOutline16,
     IconEditOutline16,
     IconFolderClose16,
     IconFolderOpen16,
     IconRefreshOutline16,
     IconSearchOutline16,
+    IconPaperclipOutline16,
     ReadBlock,
   } = icons
   const icon = (Component, props = {}) => Component ? h(Component, { size: 14, ...props }) : null
@@ -79,7 +97,11 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
     const [error, setError] = useState(null)
     const [workspaceLeft, setWorkspaceLeft] = useState(50)
     const [explorerWidth, setExplorerWidth] = useState(320)
+    const [activeDirectory, setActiveDirectory] = useState('.')
+    const [uploadState, setUploadState] = useState(null)
     const dragRef = useRef(null)
+    const uploadInputRef = useRef(null)
+    const uploadAbortRef = useRef(null)
     const workspaceRef = useRef(null)
     const outputRef = useRef(null)
     const selectedHost = useMemo(() => hosts.find((host) => host.host_id === hostId), [hosts, hostId])
@@ -111,6 +133,7 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
       const cwd = host?.cwd || '.'
       setHostId(nextHostId)
       setRootPath(cwd)
+      setActiveDirectory(cwd)
       setDirectories({})
       setExpanded({ [cwd]: true })
       setFile(null)
@@ -126,11 +149,17 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
     }
     const openEntry = async (entry) => {
       if (directoryEntry(entry)) {
+        setActiveDirectory(entry.path)
         const next = !expanded[entry.path]
         setExpanded((current) => ({ ...current, [entry.path]: next }))
         if (next) loadDirectory(entry.path).catch((err) => setError(err.message))
         return
       }
+      setFile({ ...entry, previewUnavailable: true })
+      setContent('')
+      setSavedContent('')
+      setEditing(false)
+      setView('files')
       try {
         const result = await api.readFile(hostId, entry.path)
         setFile(result)
@@ -140,7 +169,7 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
         setView('files')
         setError(null)
       } catch (err) {
-        setError(err.message)
+        setError(`${err.message}；该文件仍可直接下载。`)
       }
     }
     const save = async () => {
@@ -189,8 +218,42 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
         setError(err.message)
       }
     }
+    const upload = async (event) => {
+      const selected = event.target.files?.[0]
+      event.target.value = ''
+      if (!selected || !hostId || uploadState) return
+      const directory = activeDirectory || rootPath
+      const exists = (directories[directory] ?? []).some((entry) => entry.name === selected.name)
+      if (exists && !window.confirm(`“${selected.name}”已存在，确定覆盖吗？`)) return
+      const targetPath = joinRemotePath(directory, selected.name)
+      const controller = new AbortController()
+      uploadAbortRef.current = controller
+      setUploadState({ name: selected.name, percent: 0 })
+      try {
+        await api.uploadFile(hostId, targetPath, selected, ({ percent }) => {
+          setUploadState({ name: selected.name, percent })
+        }, controller.signal)
+        await loadDirectory(directory, true)
+        setError(null)
+      } catch (err) {
+        setError(err.code === 'TRANSFER_ABORTED' ? null : err.message)
+      } finally {
+        uploadAbortRef.current = null
+        setUploadState(null)
+      }
+    }
+    const download = () => {
+      if (!file?.path) return
+      const link = document.createElement('a')
+      link.href = api.downloadUrl(hostId, file.path)
+      link.download = file.name || file.path.split(/[\\/]/).pop() || 'download'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+    }
     const close = () => {
       if (dirty && !window.confirm('当前文件有未保存修改，确定关闭工作台吗？')) return
+      uploadAbortRef.current?.abort()
       setOpen(false)
       setMenuOpen(false)
     }
@@ -266,7 +329,7 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
       const folder = directoryEntry(entry)
       const isOpen = Boolean(expanded[entry.path])
       return h(Fragment, { key: entry.path },
-        h('button', { className: 'remoteWorkspace__treeEntry', type: 'button', style: { paddingLeft: `${6 + depth * 16}px` }, 'data-active': String(file?.path === entry.path), title: entry.path, onClick: () => openEntry(entry) },
+        h('button', { className: 'remoteWorkspace__treeEntry', type: 'button', style: { paddingLeft: `${6 + depth * 16}px` }, 'data-active': String(folder ? activeDirectory === entry.path : file?.path === entry.path), title: entry.path, onClick: () => openEntry(entry) },
           h('span', { className: 'remoteWorkspace__treeChevron' }, icon(folder ? (isOpen ? IconChevronDownOutline14 : IconChevronRightOutline14) : null)),
           icon(folder ? (isOpen ? IconFolderOpen16 : IconFolderClose16) : IconCodeOutline16),
           h('span', { className: 'remoteWorkspace__treeName' }, entry.name),
@@ -304,13 +367,18 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
         h('div', { className: 'remoteWorkspace__editorbar' },
           h('span', { className: 'remoteWorkspace__editorPath', title: file.path }, file.path),
           h('div', { className: 'remoteWorkspace__editorActions' },
-            editing
+            button({ className: 'remoteWorkspace__iconButton', icon: icon(IconDownloadOutline16), onClick: download, 'aria-label': '下载文件', title: '下载文件' }),
+            fileCanEdit(file) && editing
               ? h('button', { className: 'remoteWorkspace__button', type: 'button', onClick: () => { setContent(savedContent); setEditing(false) } }, '取消')
-              : button({ className: 'remoteWorkspace__editButton', icon: icon(IconEditOutline16), onClick: () => setEditing(true) }, '编辑'),
-            editing ? button({ className: 'remoteWorkspace__saveButton', icon: icon(IconCheckOutline16), disabled: !dirty, onClick: save }, '保存') : null,
+              : fileCanEdit(file)
+                ? button({ className: 'remoteWorkspace__editButton', icon: icon(IconEditOutline16), onClick: () => setEditing(true) }, '编辑')
+                : null,
+            fileCanEdit(file) && editing ? button({ className: 'remoteWorkspace__saveButton', icon: icon(IconCheckOutline16), disabled: !dirty, onClick: save }, '保存') : null,
           ),
         ),
-        editing
+        file.previewUnavailable
+          ? h('div', { className: 'remoteWorkspace__empty' }, '该文件无法进行文本预览，可直接下载')
+          : editing
           ? h('textarea', {
             className: 'remoteWorkspace__editorTextArea',
             value: content,
@@ -338,7 +406,19 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
 
     return h('span', { className: 'remoteWorkspace__launcher' },
       button({ className: 'remoteWorkspace__launcherButton', title: '选择服务器并打开远程开发工作台', 'aria-label': '选择服务器并打开远程开发工作台', 'aria-expanded': menuOpen, onClick: () => setMenuOpen((current) => !current) }, '服务器'),
-      menuOpen ? h('div', { className: 'remoteWorkspace__serverMenu', role: 'menu' }, hosts.length ? hosts.map((host) => h('button', { className: 'remoteWorkspace__serverOption', key: host.host_id, type: 'button', onClick: () => selectHost(host.host_id) }, h('span', null, host.display_name || host.host_id), h('span', { className: 'remoteWorkspace__serverStatus' }, hostLabel(host)))) : h('div', { className: 'remoteWorkspace__treeMessage' }, '正在加载服务器…')) : null,
+      menuOpen ? h('div', { className: 'remoteWorkspace__serverMenu', role: 'menu' }, hosts.length ? hosts.map((host) => {
+        const status = host?.status || (host?.online ? 'online' : 'offline')
+        const numericLatency = Number(host?.latency_ms)
+        const latency = host?.latency_ms != null && Number.isFinite(numericLatency) ? Math.round(numericLatency) : null
+        const level = latencyLevel(host)
+        return h('button', { className: 'remoteWorkspace__serverOption', key: host.host_id, type: 'button', onClick: () => selectHost(host.host_id) },
+          h('span', null, host.display_name || host.host_id),
+          h('span', { className: 'remoteWorkspace__serverMeta' },
+            h('span', { className: 'remoteWorkspace__serverStatus' }, status),
+            latency == null ? null : h('span', { className: `remoteWorkspace__latency remoteWorkspace__latency--${level}` }, `${latency} ms`),
+          ),
+        )
+      }) : h('div', { className: 'remoteWorkspace__treeMessage' }, '正在加载服务器…')) : null,
       open ? h('section', {
         className: 'remoteWorkspace',
         role: 'dialog',
@@ -381,9 +461,22 @@ export function createRemoteWorkspaceAction(React, api, icons = {}) {
           ),
           h('div', { className: 'remoteWorkspace__explorerSplitter', role: 'separator', 'aria-label': '调整资源管理器宽度', onPointerDown: (event) => beginResize('explorer', event), onPointerUp: endResize }),
           h('aside', { className: 'remoteWorkspace__explorer' },
-            h('div', { className: 'remoteWorkspace__explorerHead' }, h('span', { className: 'remoteWorkspace__label' }, '资源管理器'), button({ className: 'remoteWorkspace__iconButton', icon: icon(IconRefreshOutline16), onClick: () => loadDirectory(rootPath, true).catch((err) => setError(err.message)), 'aria-label': '刷新目录', title: '刷新目录' })),
+            h('div', { className: 'remoteWorkspace__explorerHead' },
+              h('span', { className: 'remoteWorkspace__label' }, '资源管理器'),
+              h('div', { className: 'remoteWorkspace__explorerActions' },
+                button({ className: 'remoteWorkspace__iconButton', icon: icon(IconPaperclipOutline16), disabled: Boolean(uploadState), onClick: () => uploadInputRef.current?.click(), 'aria-label': `上传到 ${activeDirectory}`, title: `上传到 ${activeDirectory}` }),
+                button({ className: 'remoteWorkspace__iconButton', icon: icon(IconRefreshOutline16), onClick: () => loadDirectory(activeDirectory || rootPath, true).catch((err) => setError(err.message)), 'aria-label': '刷新目录', title: '刷新目录' }),
+              ),
+              h('input', { className: 'remoteWorkspace__fileInput', ref: uploadInputRef, type: 'file', onChange: upload }),
+            ),
+            uploadState ? h('div', { className: 'remoteWorkspace__transfer', role: 'status' },
+              h('span', { title: uploadState.name }, uploadState.name),
+              h('progress', { max: 100, value: uploadState.percent }),
+              h('strong', null, `${uploadState.percent}%`),
+              button({ className: 'remoteWorkspace__iconButton', icon: icon(IconCloseOutline16), onClick: () => uploadAbortRef.current?.abort(), 'aria-label': '取消上传', title: '取消上传' }),
+            ) : null,
             h('div', { className: 'remoteWorkspace__search' }, h(Input || 'input', { className: 'remoteWorkspace__searchInput', icon: icon(IconSearchOutline16), value: treeFilter, type: 'search', placeholder: '筛选文件…', 'aria-label': '筛选文件', onChange: (event) => setTreeFilter(event.target.value) })),
-            h('div', { className: 'remoteWorkspace__tree' }, h('button', { className: 'remoteWorkspace__treeEntry', type: 'button', onClick: () => setExpanded((current) => ({ ...current, [rootPath]: !current[rootPath] })) }, icon(expanded[rootPath] ? IconChevronDownOutline14 : IconChevronRightOutline14), icon(expanded[rootPath] ? IconFolderOpen16 : IconFolderClose16), h('span', { className: 'remoteWorkspace__treeName' }, rootPath)), expanded[rootPath] ? renderTree(rootPath) : null, loadingPaths[rootPath] ? h('div', { className: 'remoteWorkspace__treeMessage' }, '读取中…') : null),
+            h('div', { className: 'remoteWorkspace__tree' }, h('button', { className: 'remoteWorkspace__treeEntry', type: 'button', 'data-active': String(activeDirectory === rootPath), onClick: () => { setActiveDirectory(rootPath); setExpanded((current) => ({ ...current, [rootPath]: !current[rootPath] })) } }, icon(expanded[rootPath] ? IconChevronDownOutline14 : IconChevronRightOutline14), icon(expanded[rootPath] ? IconFolderOpen16 : IconFolderClose16), h('span', { className: 'remoteWorkspace__treeName' }, rootPath)), expanded[rootPath] ? renderTree(rootPath) : null, loadingPaths[rootPath] ? h('div', { className: 'remoteWorkspace__treeMessage' }, '读取中…') : null),
           ),
         ),
       ) : null,

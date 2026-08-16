@@ -1,15 +1,22 @@
+import { createReadStream, createWriteStream } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
 import { lstat, mkdir, opendir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import { createHostState } from './state.js'
 import { resolveDialect, runCommand } from '../executor.js'
 import { createKeyedLock } from '../async-key-lock.js'
 import { DEFAULT_MAX_REQUEST_BODY_BYTES, readJsonBody } from '../http-json.js'
 import { createWorkspacePathResolver } from './workspace-path.js'
 import { DEFAULT_MAX_PROCESS_OUTPUT_BYTES } from '../output-limits.js'
+import {
+  createTransferCounter,
+  declaredTransferSize,
+  downloadHeaders,
+} from '../file-transfer.js'
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost'])
 const MAX_REMOTE_FILE_BYTES = 10 * 1024 * 1024
@@ -92,6 +99,7 @@ function routeKey(method, pathname) {
 function fileRoute(method, pathname) {
   if (method === 'GET' && pathname === '/v1/files') return true
   if (method === 'GET' && pathname === '/v1/file') return true
+  if ((method === 'GET' || method === 'PUT') && pathname === '/v1/transfer') return true
   return (method === 'PUT' || method === 'DELETE') && pathname === '/v1/file'
 }
 
@@ -354,6 +362,41 @@ export async function startHostd(options = {}) {
     json(res, 200, { path: filePath, deleted: true })
   }
 
+  const handleDownloadTransfer = async (url, res) => {
+    const filePath = await resolveWorkspacePath(url.searchParams.get('path'))
+    const attrs = await stat(filePath)
+    res.writeHead(200, downloadHeaders(filePath, attrs.size))
+    await pipeline(createReadStream(filePath), res)
+  }
+
+  const handleUploadTransfer = async (req, url, res) => {
+    declaredTransferSize(req)
+    const requestedPath = url.searchParams.get('path')
+    const targetPath = await resolveWorkspacePath(requestedPath)
+    let transferredBytes = 0
+    await withWorkspaceMutation(workspaceRoot, async () => {
+      await mkdir(path.dirname(targetPath), { recursive: true })
+      const lockedPath = await resolveWorkspacePath(requestedPath)
+      const temporaryPath = await resolveWorkspacePath(path.join(
+        path.dirname(lockedPath),
+        `.dsh-tmp-${randomUUID()}`,
+      ))
+      const counter = createTransferCounter()
+      try {
+        await pipeline(req, counter, createWriteStream(temporaryPath, { mode: 0o600 }))
+        transferredBytes = counter.transferredBytes
+        const publishPath = await resolveWorkspacePath(requestedPath)
+        if (publishPath !== lockedPath) {
+          throw codedError('REMOTE_PATH_CHANGED', '文件父目录在发布前发生变化', 409)
+        }
+        await rename(temporaryPath, publishPath)
+      } finally {
+        await unlink(temporaryPath).catch(() => {})
+      }
+    })
+    json(res, 200, { path: targetPath, size: transferredBytes })
+  }
+
   const listener = async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', 'http://hostd.local')
@@ -381,10 +424,16 @@ export async function startHostd(options = {}) {
         if (key === 'GET /v1/file') await handleReadFile(url, res)
         if (key === 'PUT /v1/file') await handleWriteFile(req, res)
         if (key === 'DELETE /v1/file') await handleDeleteFile(req, res)
+        if (key === 'GET /v1/transfer') await handleDownloadTransfer(url, res)
+        if (key === 'PUT /v1/transfer') await handleUploadTransfer(req, url, res)
         return
       }
       json(res, 404, { error: 'not found' })
     } catch (error) {
+      if (res.headersSent) {
+        res.destroy(error)
+        return
+      }
       json(res, error?.status ?? 400, {
         error: error instanceof Error ? error.message : 'bad request',
         code: error?.code ?? 'HOSTD_ERROR',

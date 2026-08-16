@@ -1,5 +1,10 @@
 const PREFIX = '/remote-ops/v1'
 import { DEFAULT_MAX_REQUEST_BODY_BYTES, readJsonBody } from './http-json.js'
+import { pipeline } from 'node:stream/promises'
+import {
+  declaredTransferSize,
+  downloadHeaders,
+} from './file-transfer.js'
 
 export function isLoopbackAddress(address) {
   return address === '127.0.0.1'
@@ -127,6 +132,9 @@ function matchRoute(method, pathname) {
   if (method === 'GET' && file) return { name: 'readFile', hostId: decodeURIComponent(file[1]) }
   if (method === 'PUT' && file) return { name: 'writeFile', hostId: decodeURIComponent(file[1]) }
   if (method === 'DELETE' && file) return { name: 'deleteFile', hostId: decodeURIComponent(file[1]) }
+  const transfer = /^\/hosts\/([^/]+)\/transfer$/.exec(pathname)
+  if (method === 'GET' && transfer) return { name: 'downloadTransfer', hostId: decodeURIComponent(transfer[1]) }
+  if (method === 'PUT' && transfer) return { name: 'uploadTransfer', hostId: decodeURIComponent(transfer[1]) }
   const terminal = /^\/hosts\/([^/]+)\/terminal$/.exec(pathname)
   if (method === 'POST' && terminal) return { name: 'terminal', hostId: decodeURIComponent(terminal[1]) }
   const changes = /^\/hosts\/([^/]+)\/changes$/.exec(pathname)
@@ -149,7 +157,10 @@ function matchRoute(method, pathname) {
   return null
 }
 
-export function createHostApiHandler({ runner, maxRequestBodyBytes = DEFAULT_MAX_REQUEST_BODY_BYTES }) {
+export function createHostApiHandler({
+  runner,
+  maxRequestBodyBytes = DEFAULT_MAX_REQUEST_BODY_BYTES,
+}) {
   return async function handle(req, res) {
     if (!isLoopbackAddress(req.socket?.remoteAddress)) {
       json(res, 403, { error: 'loopback only', code: 'LOOPBACK_ONLY' })
@@ -298,6 +309,23 @@ export function createHostApiHandler({ runner, maxRequestBodyBytes = DEFAULT_MAX
         json(res, 200, publicChange(result))
         return
       }
+      if (route.name === 'uploadTransfer') {
+        const size = declaredTransferSize(req)
+        const result = await runner.uploadRemoteFile(
+          route.hostId,
+          url.searchParams.get('path'),
+          req,
+          { size },
+        )
+        json(res, 200, { host_id: result.hostId, path: result.path, size: result.size })
+        return
+      }
+      if (route.name === 'downloadTransfer') {
+        const result = await runner.downloadRemoteFile(route.hostId, url.searchParams.get('path'))
+        res.writeHead(200, downloadHeaders(result.path, result.size))
+        await pipeline(result.stream, res)
+        return
+      }
       if (route.name === 'terminal') {
         const body = await readJsonBody(req, maxRequestBodyBytes)
         const result = await runner.exec({
@@ -344,6 +372,10 @@ export function createHostApiHandler({ runner, maxRequestBodyBytes = DEFAULT_MAX
         json(res, 200, publicJob(result, result.log))
       }
     } catch (error) {
+      if (res.headersSent) {
+        res.destroy(error)
+        return
+      }
       const code = error?.code ?? 'REMOTE_OPS_ERROR'
       const status = error?.status ?? (code === 'HOST_NOT_FOUND' || code === 'JOB_NOT_FOUND' || code === 'CHANGE_NOT_FOUND'
         ? 404
@@ -373,6 +405,9 @@ export function registerHostApi(webServer, runner, options = {}) {
   return webServer.register({
     kind: 'prefix',
     path: PREFIX,
-    handler: createHostApiHandler({ runner, maxRequestBodyBytes: options.maxRequestBodyBytes }),
+    handler: createHostApiHandler({
+      runner,
+      maxRequestBodyBytes: options.maxRequestBodyBytes,
+    }),
   })
 }

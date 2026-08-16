@@ -78,3 +78,53 @@ test('工作区 API 使用编码路径和 snake_case 请求字段', async () => 
   assert.equal(calls[4].url, '/remote-ops/v1/hosts/h%2F1/changes?status=pending')
   assert.equal(calls[5].url, '/remote-ops/v1/changes/c%2F1/accept')
 })
+
+test('文件传输 API 使用二进制请求并上报上传进度', async () => {
+  const requests = []
+  const progress = []
+  const client = createSettingsClient(fetch, () => {
+    const request = {
+      upload: {},
+      open(method, url) { requests.push({ method, url, request: this }) },
+      send(body) {
+        requests.at(-1).body = body
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 3, total: 4 })
+        this.status = 200
+        this.response = { path: '/srv/archive.bin', size: 4 }
+        this.onload?.()
+      },
+    }
+    return request
+  })
+  const file = new Blob([Buffer.from([0, 1, 2, 255])])
+
+  const result = await client.uploadFile('h/1', '/srv/archive.bin', file, (value) => progress.push(value))
+
+  assert.equal(requests[0].method, 'PUT')
+  assert.equal(requests[0].url, '/remote-ops/v1/hosts/h%2F1/transfer?path=%2Fsrv%2Farchive.bin')
+  assert.equal(requests[0].body, file)
+  assert.deepEqual(progress, [{ loaded: 3, total: 4, percent: 75 }])
+  assert.equal(result.size, 4)
+  assert.equal(client.downloadUrl('h/1', '/srv/archive.bin'), '/remote-ops/v1/hosts/h%2F1/transfer?path=%2Fsrv%2Farchive.bin')
+})
+
+test('上传开始前已取消时立即返回取消错误', async () => {
+  let sent = false
+  const client = createSettingsClient(fetch, () => ({
+    upload: {},
+    open() {},
+    abort() {},
+    send() { sent = true },
+  }))
+  const controller = new AbortController()
+  controller.abort()
+
+  const result = await Promise.race([
+    client.uploadFile('h1', '/srv/archive.bin', new Blob(), null, controller.signal)
+      .then(() => 'resolved', (error) => error.code),
+    new Promise((resolve) => setTimeout(() => resolve('pending'), 25)),
+  ])
+
+  assert.equal(result, 'TRANSFER_ABORTED')
+  assert.equal(sent, false)
+})

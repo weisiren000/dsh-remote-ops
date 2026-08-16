@@ -10,7 +10,11 @@ async function parse(response) {
   return body
 }
 
-export function createSettingsClient(fetchImpl = fetch) {
+function transferUrl(hostId, remotePath) {
+  return `${PREFIX}/hosts/${encodeURIComponent(hostId)}/transfer?path=${encodeURIComponent(remotePath)}`
+}
+
+export function createSettingsClient(fetchImpl = fetch, xhrFactory = () => new XMLHttpRequest()) {
   return {
     list() {
       return fetchImpl(`${PREFIX}/hosts`).then(parse)
@@ -149,6 +153,47 @@ export function createSettingsClient(fetchImpl = fetch) {
     readFile(hostId, remotePath) { return this.file(hostId, remotePath) },
     writeFile(hostId, input) { return this.saveFile(hostId, input) },
     deleteRemoteFile(hostId, input) { return this.deleteFile(hostId, input) },
+    uploadFile(hostId, remotePath, file, onProgress, signal) {
+      return new Promise((resolve, reject) => {
+        const request = xhrFactory()
+        const cleanup = () => signal?.removeEventListener('abort', abort)
+        const abort = () => request.abort()
+        request.open('PUT', transferUrl(hostId, remotePath))
+        request.responseType = 'json'
+        request.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return
+          onProgress?.({
+            loaded: event.loaded,
+            total: event.total,
+            percent: Math.round((event.loaded / event.total) * 100),
+          })
+        }
+        request.onload = () => {
+          const body = request.response ?? {}
+          if (request.status >= 200 && request.status < 300) {
+            cleanup()
+            resolve(body)
+            return
+          }
+          const error = new Error(body.error ?? `http ${request.status}`)
+          Object.assign(error, body, { code: body.code ?? 'REMOTE_OPS_ERROR' })
+          cleanup()
+          reject(error)
+        }
+        request.onerror = () => { cleanup(); reject(new Error('文件上传网络连接失败')) }
+        request.onabort = () => { cleanup(); reject(Object.assign(new Error('文件上传已取消'), { code: 'TRANSFER_ABORTED' })) }
+        if (signal?.aborted) {
+          cleanup()
+          reject(Object.assign(new Error('文件上传已取消'), { code: 'TRANSFER_ABORTED' }))
+          return
+        }
+        signal?.addEventListener('abort', abort, { once: true })
+        request.send(file)
+      })
+    },
+    downloadUrl(hostId, remotePath) {
+      return transferUrl(hostId, remotePath)
+    },
   }
 }
 

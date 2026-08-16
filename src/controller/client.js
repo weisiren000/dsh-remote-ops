@@ -1,4 +1,5 @@
 import { createSshClient } from './ssh-client.js'
+import { Readable } from 'node:stream'
 import { DEFAULT_MAX_REQUEST_BODY_BYTES, readJsonResponse } from '../http-json.js'
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1'])
@@ -54,6 +55,18 @@ async function request(url, init, maxResponseBodyBytes) {
     )
   }
   return body
+}
+
+async function transferResponse(url, init, maxResponseBodyBytes) {
+  let response
+  try {
+    response = await fetch(url, init)
+  } catch (error) {
+    throw codedError(isConnectionRefused(error) ? 'ECONNREFUSED' : 'REMOTE_NETWORK', String(error), error)
+  }
+  if (response.ok) return response
+  const body = await readJsonResponse(response, maxResponseBodyBytes)
+  throw codedError(body.code ?? 'REMOTE_HTTP', body.error ?? `http ${response.status}`)
 }
 
 function authHeaders(host, extra = {}) {
@@ -191,6 +204,36 @@ export function createHostClient(options = {}) {
         headers: authHeaders(host, { 'content-type': 'application/json' }),
         body: JSON.stringify({ path: remotePath, expected_version: expectedVersion }),
       }, maxResponseBodyBytes)
+    },
+    async uploadRemoteFile(host, remotePath, source, options = {}) {
+      if (host.transport === 'ssh') return ssh.uploadRemoteFile(host, remotePath, source)
+      const url = assertAddress(host.address)
+      const query = new URLSearchParams({ path: remotePath })
+      const headers = authHeaders(host, { 'content-type': 'application/octet-stream' })
+      if (options.size !== undefined) headers['content-length'] = String(options.size)
+      const response = await transferResponse(new URL(`/v1/transfer?${query}`, url), {
+        method: 'PUT',
+        headers,
+        body: source,
+        duplex: 'half',
+        signal: options.signal,
+      }, maxResponseBodyBytes)
+      return readJsonResponse(response, maxResponseBodyBytes)
+    },
+    async downloadRemoteFile(host, remotePath, options = {}) {
+      if (host.transport === 'ssh') return ssh.downloadRemoteFile(host, remotePath)
+      const url = assertAddress(host.address)
+      const query = new URLSearchParams({ path: remotePath })
+      const response = await transferResponse(new URL(`/v1/transfer?${query}`, url), {
+        headers: authHeaders(host),
+        signal: options.signal,
+      }, maxResponseBodyBytes)
+      const size = Number(response.headers.get('content-length'))
+      if (!Number.isSafeInteger(size) || size < 0) {
+        await response.body?.cancel?.().catch(() => {})
+        throw codedError('TRANSFER_LENGTH_INVALID', '远端文件传输长度无效')
+      }
+      return { path: remotePath, size, stream: response.body ? Readable.fromWeb(response.body) : Readable.from([]) }
     },
     async terminal(host, spec) {
       return this.exec(host, spec)

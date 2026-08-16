@@ -432,6 +432,16 @@ export function createRunner({ store, client, now = Date.now,
       })
       return { ...change, delete: result }
     },
+    async uploadRemoteFile(hostRef, remotePath, source, options = {}) {
+      const target = resolveTarget(store, hostRef)
+      const result = await client.uploadRemoteFile(target, remotePath, source, options)
+      return { hostId: target.hostId, ...result }
+    },
+    async downloadRemoteFile(hostRef, remotePath, options = {}) {
+      const target = resolveTarget(store, hostRef)
+      const result = await client.downloadRemoteFile(target, remotePath, options)
+      return { hostId: target.hostId, ...result }
+    },
     listChanges(filter = {}) {
       return store.listChanges(filter)
     },

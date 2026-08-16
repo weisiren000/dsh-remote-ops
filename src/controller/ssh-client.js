@@ -4,8 +4,10 @@ import path from 'node:path'
 import ssh2 from 'ssh2'
 import {
   deleteSftpFile,
+  downloadSftpFile,
   listSftpDirectory,
   readSftpFile,
+  uploadSftpFile,
   writeSftpFile,
 } from './sftp.js'
 import { execChannel } from './ssh-exec.js'
@@ -366,6 +368,14 @@ export function createSshClient({ keysDir, sftpLockStaleMs, openConnection: open
     async deleteRemoteFile(host, remotePath, expectedVersion) {
       const connection = await ensureSession(host)
       return deleteSftpFile(connection, remotePath, expectedVersion, { staleMs: sftpLockStaleMs })
+    },
+    async uploadRemoteFile(host, remotePath, source) {
+      const connection = await ensureSession(host)
+      return uploadSftpFile(connection, remotePath, source)
+    },
+    async downloadRemoteFile(host, remotePath) {
+      const connection = await ensureSession(host)
+      return downloadSftpFile(connection, remotePath)
     },
     async reconnect(host) {
       sessions.get(host.hostId)?.end()

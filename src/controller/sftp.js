@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import { createKeyedLock } from '../async-key-lock.js'
+import { createTransferCounter } from '../file-transfer.js'
 
 const MAX_REMOTE_FILE_BYTES = 10 * 1024 * 1024
 export const DEFAULT_SFTP_LOCK_STALE_MS = 30 * 60 * 1000
@@ -346,4 +348,49 @@ async function deleteSftpFileLocked(connection, pathValue, expectedVersion, opti
 export async function deleteSftpFile(connection, remotePath, expectedVersion, options = {}) {
   const pathValue = validateRemotePath(remotePath)
   return withFileLock(connection, pathValue, () => deleteSftpFileLocked(connection, pathValue, expectedVersion, options))
+}
+
+export async function uploadSftpFile(connection, remotePath, source) {
+  const pathValue = validateRemotePath(remotePath)
+  return withFileLock(connection, pathValue, async () => {
+    const sftp = await openSftp(connection)
+    const temporaryPath = `${pathValue}.dsh-tmp-${randomUUID()}`
+    const counter = createTransferCounter()
+    try {
+      await pipeline(source, counter, sftp.createWriteStream(temporaryPath, { mode: 0o600 }))
+      await replaceRemoteFile(sftp, temporaryPath, pathValue)
+      return { path: pathValue, size: counter.transferredBytes }
+    } catch (error) {
+      await call(sftp, 'unlink', temporaryPath).catch(() => {})
+      throw sftpError(error, '无法上传远程文件')
+    } finally {
+      closeSftp(sftp)
+    }
+  })
+}
+
+export async function downloadSftpFile(connection, remotePath) {
+  const pathValue = validateRemotePath(remotePath)
+  const sftp = await openSftp(connection)
+  try {
+    const attrs = await call(sftp, 'stat', pathValue)
+    const size = Number(attrs?.size ?? 0)
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw codedError('TRANSFER_LENGTH_INVALID', '远端文件传输长度无效', { size })
+    }
+    const stream = sftp.createReadStream(pathValue)
+    let closed = false
+    const cleanup = () => {
+      if (closed) return
+      closed = true
+      closeSftp(sftp)
+    }
+    stream.once('end', cleanup)
+    stream.once('error', cleanup)
+    stream.once('close', cleanup)
+    return { path: pathValue, size, mtime: attrs?.mtime ? attrs.mtime * 1000 : null, stream }
+  } catch (error) {
+    closeSftp(sftp)
+    throw sftpError(error, '无法下载远程文件')
+  }
 }
