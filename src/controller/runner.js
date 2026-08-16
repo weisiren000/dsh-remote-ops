@@ -1,111 +1,29 @@
 import { resolveTarget } from './resolve.js'
-import { createHash } from 'node:crypto'
-
-function jobStatus(result) {
-  if (result.timedOut) return 'timed_out'
-  if (result.aborted) return 'canceled'
-  if (result.exitCode === 0) return 'succeeded'
-  return 'failed'
-}
-
-function hostStatus(error) {
-  switch (error?.code) {
-    case 'SSH_KEY_MISSING': return 'key_missing'
-    case 'SSH_AUTH_FAILED':
-    case 'SSH_PASSWORD_REQUIRED': return 'auth_failed'
-    case 'HOST_KEY_CHANGED':
-    case 'HOST_KEY_UNTRUSTED': return 'degraded'
-    default: return 'offline'
-  }
-}
-
-function renderLog(result) {
-  const out = result.stdout ?? ''
-  const err = result.stderr ?? ''
-  if (err.length === 0) return out
-  return `${out}${out.endsWith('\n') || out.length === 0 ? '' : '\n'}[stderr]\n${err}`
-}
-
-function taskStats(store, hostId) {
-  const counts = {
-    running: 0, succeeded: 0, failed: 0, timed_out: 0, canceled: 0, interrupted: 0,
-  }
-  for (const job of store.listJobs({ hostId })) counts[job.status] += 1
-  return counts
-}
-
-function isRemoteFileMissing(error) {
-  const code = error?.cause?.code ?? error?.code
-  return code === 2 || code === 'ENOENT' || /no such file|not found/i.test(error?.message ?? '')
-}
-
-function changeActionStatus(action) {
-  if (action === 'accept' || action === 'accepted') return 'accepted'
-  if (action === 'undo' || action === 'revert' || action === 'reverted') return 'reverted'
-  if (action === 'restore' || action === 'restored') return 'restored'
-  const error = new Error(`unsupported change action: ${action}`)
-  error.code = 'CHANGE_ACTION_INVALID'
-  throw error
-}
-
-function contentVersion(content) {
-  if (content === null || content === undefined) return null
-  return createHash('sha256').update(String(content), 'utf8').digest('hex')
-}
-
-function conflictError(expectedVersion, currentVersion) {
-  const error = new Error('远程文件已被其他操作修改，请重新加载后再保存')
-  error.code = 'REMOTE_FILE_CONFLICT'
-  error.expectedVersion = expectedVersion
-  error.currentVersion = currentVersion
-  return error
-}
-
-async function refreshHost(store, client, host, options = {}) {
-  const started = Date.now()
-  const wasOnline = host.status === 'online' || host.online === true
-  await store.upsertHost({ ...host, status: 'connecting' })
-  try {
-    const live = await client.heartbeat(host)
-    const next = {
-      ...host,
-      online: true,
-      status: 'online',
-      latencyMs: Math.max(0, Date.now() - started),
-      cwd: live.cwd ?? host.cwd,
-      os: live.os ?? host.os,
-      dialect: live.dialect ?? host.dialect,
-      lastHeartbeatAt: live.ts ?? Date.now(),
-      connectionStartedAt: wasOnline ? host.connectionStartedAt ?? Date.now() : Date.now(),
-      lastError: undefined,
-      lastErrorAt: undefined,
-    }
-    await store.upsertHost(next)
-    return next
-  } catch (error) {
-    const next = {
-      ...host,
-      online: false,
-      status: hostStatus(error),
-      latencyMs: undefined,
-      lastError: error?.message ?? String(error),
-      lastErrorAt: Date.now(),
-    }
-    await store.upsertHost(next)
-    if (options.rethrow) throw error
-    return next
-  }
-}
-
-export function createRunner({ store, client, now = Date.now }) {
+import { randomUUID } from 'node:crypto'
+import { DEFAULT_MAX_INLINE_OUTPUT_BYTES, DEFAULT_MAX_PROCESS_OUTPUT_BYTES } from '../output-limits.js'
+import { readLocator as readStructuredLocator } from './locator-reader.js'
+import {
+  assertOwner, changeActionStatus, codedError, conflictError, contentVersion, createDeferred,
+  hostStatus, isRemoteFileMissing, jobStatus, refreshHost, renderLog, stopOutcome, taskStats,
+  withBoundedLog,
+} from './runner-support.js'
+export function createRunner({ store, client, now = Date.now,
+  maxInlineOutputBytes = DEFAULT_MAX_INLINE_OUTPUT_BYTES,
+  maxProcessOutputBytes = DEFAULT_MAX_PROCESS_OUTPUT_BYTES,
+}) {
   const activeJobs = new Map()
+  const activatingJobs = new Map()
+  const preparingJobs = new Map()
   const pendingCancels = new Set()
   let refreshPromise = null
+  let disposed = false
+  let disposePromise
   const listSnapshot = () => store.listHosts().map((row) => {
     const { deviceToken: _token, ...host } = store.getHost(row.hostId)
     return { ...host, taskStats: taskStats(store, host.hostId) }
   })
   const refreshHosts = () => {
+    if (disposed) return Promise.reject(codedError('RUNNER_DISPOSED', '远程执行服务已卸载'))
     if (refreshPromise) return refreshPromise
     const hosts = store.listHosts().map((row) => store.getHost(row.hostId))
     refreshPromise = Promise.all(hosts.map((host) => refreshHost(store, client, host)))
@@ -148,6 +66,9 @@ export function createRunner({ store, client, now = Date.now }) {
     getCurrentHost() {
       return store.getCurrentHost()
     },
+    resolveHost(hostRef, options = {}) {
+      return resolveTarget(store, hostRef, { allowOffline: options.allowOffline === true })
+    },
     async updateHost(hostId, patch) {
       const current = store.getHost(hostId)
       if (!current) {
@@ -168,102 +89,178 @@ export function createRunner({ store, client, now = Date.now }) {
         error.code = 'HOST_NOT_FOUND'
         throw error
       }
-      await client.remove?.(current)
-      for (const [jobId, active] of activeJobs) {
+      for (const active of activeJobs.values()) {
         if (active.host.hostId !== hostId) continue
-        active.controller.abort()
-        activeJobs.delete(jobId)
-        await store.updateJob(jobId, { status: 'interrupted', finishedAt: now() }).catch(() => {})
+        active.setStopReason('host_removed')
+        await client.cancel?.(active.host, active.remoteJobId).catch(() => {})
+        active.controller.abort('host_removed')
+        await active.done
       }
+      await client.remove?.(current)
       await store.removeHost(hostId)
     },
     async list() {
       const snapshot = listSnapshot()
-      queueMicrotask(() => { void refreshHosts().catch(() => {}) })
+      if (!disposed) queueMicrotask(() => { if (!disposed) void refreshHosts().catch(() => {}) })
       return snapshot
     },
     async refreshHosts() {
       return refreshHosts()
     },
     async exec(input) {
-      const preview = resolveTarget(store, input.host, { allowOffline: true })
-      await refreshHost(store, client, preview)
-      const target = resolveTarget(store, preview.hostId)
-      const job = await store.createJob({
-        hostId: target.hostId,
-        command: input.command,
-        description: input.description,
-        status: 'running',
-        startedAt: now(),
-      })
-      let logWrite = Promise.resolve()
-      let stderrStarted = false
+      const jobId = input.jobId ?? randomUUID()
+      const activation = createDeferred()
       const controller = new AbortController()
-      const onInputAbort = () => controller.abort()
-      input.signal?.addEventListener('abort', onInputAbort, { once: true })
-      const active = { host: target, controller, remoteJobId: undefined, cancelRequested: false }
+      let active
+      let stopReason
+      const setStopReason = (reason) => {
+        if (stopReason === undefined) stopReason = reason
+        if (active) active.stopReason = stopReason
+      }
+      const requestStop = (reason) => {
+        setStopReason(reason)
+        if (!controller.signal.aborted) controller.abort(reason)
+      }
+      const assertCanStart = () => {
+        if (disposed) throw codedError('RUNNER_DISPOSED', '远程执行服务已卸载')
+        if (controller.signal.aborted) throw codedError('ABORTED', '远程命令在启动前已取消')
+      }
+      const onInputAbort = () => requestStop('user_cancel')
+      if (input.signal?.aborted) onInputAbort()
+      else input.signal?.addEventListener('abort', onInputAbort, { once: true })
+      activatingJobs.set(jobId, activation.promise)
+      preparingJobs.set(jobId, requestStop)
+      let job
+      let target
+      try {
+        assertCanStart()
+        const preview = resolveTarget(store, input.host, { allowOffline: true })
+        await refreshHost(store, client, preview)
+        assertCanStart()
+        target = resolveTarget(store, preview.hostId)
+        job = await store.createJob({
+          jobId,
+          hostId: target.hostId,
+          command: input.command,
+          description: input.description,
+          status: 'running',
+          startedAt: now(),
+          ownerSessionId: input.ownerSessionId,
+        })
+        assertCanStart()
+      } catch (error) {
+        if (job && controller.signal.aborted) {
+          await store.updateJob(job.jobId, {
+            ...stopOutcome(stopReason, now()),
+            finishedAt: now(),
+          })
+        }
+        activatingJobs.delete(jobId)
+        preparingJobs.delete(jobId)
+        activation.resolve(undefined)
+        input.signal?.removeEventListener('abort', onInputAbort)
+        throw error
+      }
+      let logWrite = Promise.resolve()
+      let logError
+      let stderrStarted = false
+      const deferred = createDeferred()
+      active = {
+        host: target,
+        controller,
+        remoteJobId: undefined,
+        stopReason,
+        setStopReason,
+        restoreStopReason(reason) {
+          stopReason = reason
+          active.stopReason = reason
+        },
+        done: deferred.promise,
+      }
       activeJobs.set(job.jobId, active)
+      activation.resolve(active)
+      activatingJobs.delete(job.jobId)
+      preparingJobs.delete(job.jobId)
       if (pendingCancels.delete(job.jobId)) {
-        active.cancelRequested = true
-        controller.abort()
+        requestStop('user_cancel')
       }
       const appendLog = (chunk) => {
-        logWrite = logWrite.then(() => store.appendJobLog(job.jobId, chunk))
+        if (logError) return Promise.reject(logError)
+        logWrite = logWrite.then(() => store.appendJobLog(job.jobId, chunk)).catch((error) => {
+          logError ??= error
+          throw error
+        })
+        return logWrite
       }
       try {
+        if (controller.signal.aborted) throw codedError('ABORTED', '远程命令在启动前已取消')
         const result = await client.exec(target, {
           command: input.command,
           workdir: input.workdir,
           timeoutMs: input.timeoutMs,
+          maxOutputBytes: maxProcessOutputBytes,
           signal: controller.signal,
           jobId: job.jobId,
           onRemoteJobId(remoteJobId) { active.remoteJobId = remoteJobId },
           onStdout(chunk) {
-            appendLog(chunk)
+            return appendLog(chunk)
           },
           onStderr(chunk) {
             if (!stderrStarted) {
               stderrStarted = true
               appendLog('[stderr]\n')
             }
-            appendLog(chunk)
+            return appendLog(chunk)
           },
         })
         if (!result.streamed) appendLog(renderLog(result))
         await logWrite
+        const stopped = stopOutcome(active.stopReason, now())
         const updated = await store.updateJob(job.jobId, {
-          status: jobStatus(result),
+          status: stopped?.status ?? jobStatus(result),
           exitCode: result.exitCode,
           remoteJobId: result.remoteJobId,
           finishedAt: now(),
-          canceledAt: result.aborted ? now() : undefined,
+          canceledAt: stopped?.canceledAt ?? (result.aborted ? now() : undefined),
+          ...(stopped?.errorCode ? { errorCode: stopped.errorCode } : {}),
+          ...(stopped?.errorMessage ? { errorMessage: stopped.errorMessage } : {}),
+          outputTruncated: result.stdoutTruncated === true || result.stderrTruncated === true,
+          stdoutBytes: result.stdoutBytes,
+          stderrBytes: result.stderrBytes,
         })
-        activeJobs.delete(job.jobId)
-        input.signal?.removeEventListener('abort', onInputAbort)
-        return { ...updated, log: await store.readJobLog(job.jobId) }
+        return await withBoundedLog(store, updated, maxInlineOutputBytes)
       } catch (error) {
-        await logWrite
-        await store.upsertHost({ ...store.getHost(target.hostId), online: false, status: hostStatus(error), lastError: error?.message, lastErrorAt: now() })
-        activeJobs.delete(job.jobId)
-        input.signal?.removeEventListener('abort', onInputAbort)
+        await logWrite.catch(() => {})
+        const failure = logError ?? error
+        const stopped = stopOutcome(active.stopReason, now())
+        if (!controller.signal.aborted && !logError) {
+          await store.upsertHost({ ...store.getHost(target.hostId), online: false, status: hostStatus(failure), lastError: failure?.message, lastErrorAt: now() })
+        }
         const updated = await store.updateJob(job.jobId, {
-          status: active.cancelRequested || controller.signal.aborted ? 'canceled' : 'interrupted',
-          errorCode: error?.code,
-          errorMessage: error?.message,
+          status: stopped?.status ?? 'interrupted',
+          errorCode: stopped?.errorCode ?? failure?.code,
+          errorMessage: stopped?.errorMessage ?? failure?.message,
+          ...(stopped?.canceledAt ? { canceledAt: stopped.canceledAt } : {}),
           finishedAt: now(),
         })
-        return { ...updated, log: await store.readJobLog(job.jobId) }
+        return await withBoundedLog(store, updated, maxInlineOutputBytes)
+      } finally {
+        activeJobs.delete(job.jobId)
+        input.signal?.removeEventListener('abort', onInputAbort)
+        deferred.resolve()
       }
     },
-    async cancelJob(jobId) {
+    async cancelJob(jobId, ownerSessionId) {
       const job = store.getJob(jobId)
       if (!job) {
         const error = new Error(`job not found: ${jobId}`)
         error.code = 'JOB_NOT_FOUND'
         throw error
       }
+      assertOwner(job, ownerSessionId, 'job')
       if (job.status !== 'running') return { ...job, status: job.status }
-      const active = activeJobs.get(jobId)
+      let active = activeJobs.get(jobId)
+      if (!active && activatingJobs.has(jobId)) active = await activatingJobs.get(jobId)
       if (!active) {
         const host = store.getHost(job.hostId)
         const outcome = await client.cancel?.(host, undefined)
@@ -274,24 +271,42 @@ export function createRunner({ store, client, now = Date.now }) {
         await store.updateJob(jobId, { canceledAt: now() })
         return { ...store.getJob(jobId), status: 'cancel_requested', cancelSupported: true }
       }
+      const previousStopReason = active.stopReason
+      active.setStopReason('user_cancel')
       const outcome = await client.cancel?.(active.host, active.remoteJobId)
       if (outcome?.supported === false || outcome?.ok === false) {
+        if (!active.controller.signal.aborted && active.stopReason === 'user_cancel') {
+          active.restoreStopReason(previousStopReason)
+        }
         return { ...job, status: 'cancel_unavailable', cancelSupported: false, cancelReason: outcome.reason }
       }
-      active.cancelRequested = true
-      active.controller.abort()
+      active.controller.abort('user_cancel')
       await store.updateJob(jobId, { canceledAt: now() })
-      return { ...store.getJob(jobId), status: 'cancel_requested' }
+      await active.done
+      return { ...store.getJob(jobId), cancelSupported: true }
     },
-    async readJob(jobId) {
-      const job = store.getJob(jobId)
+    async readJob(jobId, ownerSessionId) {
+      const job = store.getJob(jobId) ?? store.getJobByDshJobId?.(jobId)
       if (!job) throw new Error(`job not found: ${jobId}`)
-      return { ...job, log: await store.readJobLog(jobId) }
+      assertOwner(job, ownerSessionId, 'job')
+      return withBoundedLog(store, job, maxInlineOutputBytes)
     },
-    async readJobLogTail(jobId, tail) {
-      const job = store.getJob(jobId)
+    async readJobLogTail(jobId, tail, ownerSessionId) {
+      const job = store.getJob(jobId) ?? store.getJobByDshJobId?.(jobId)
       if (!job) throw new Error(`job not found: ${jobId}`)
-      return { ...job, log: await store.readJobLogTail(jobId, tail) }
+      assertOwner(job, ownerSessionId, 'job')
+      const window = await store.readJobLogWindow(job.jobId, tail)
+      return {
+        ...job,
+        log: window.text,
+        logBytes: window.totalBytes,
+        logTruncated: window.truncated,
+        ...(window.locator ? { logLocator: window.locator } : {}),
+      }
+    },
+    async linkDshJob(jobId, dshJobId) {
+      if (activatingJobs.has(jobId)) await activatingJobs.get(jobId)
+      return store.updateJob(jobId, { dshJobId: String(dshJobId) })
     },
     async reconnectHost(hostId, options = {}) {
       const current = store.getHost(hostId)
@@ -352,16 +367,17 @@ export function createRunner({ store, client, now = Date.now }) {
         taskStats: taskStats(store, hostId),
       }
     },
-    async listFiles(hostRef, remotePath) {
+    async listFiles(hostRef, remotePath, options = {}) {
       const target = resolveTarget(store, hostRef)
-      const entries = await client.listDirectory(target, remotePath || target.cwd || '.')
-      return { hostId: target.hostId, path: remotePath || target.cwd || '.', entries }
+      const entries = await client.listDirectory(target, remotePath || target.cwd || '.', options)
+      return { hostId: target.hostId, path: remotePath || target.cwd || '.', entries, nextOffset: entries.nextOffset }
     },
     async readRemoteFile(hostRef, remotePath) {
       const target = resolveTarget(store, hostRef)
       const result = await client.readRemoteFile(target, remotePath)
       return { hostId: target.hostId, ...result, version: result.version ?? contentVersion(result.content) }
     },
+    readLocator(locator, options) { return readStructuredLocator({ store, client }, locator, options) },
     async writeRemoteFile(input) {
       const target = resolveTarget(store, input.host)
       let beforeContent = input.beforeContent
@@ -392,6 +408,7 @@ export function createRunner({ store, client, now = Date.now }) {
         afterVersion,
         source: input.source ?? 'manual',
         description: input.description,
+        ownerSessionId: input.ownerSessionId,
       })
       return { ...change, write }
     },
@@ -418,17 +435,18 @@ export function createRunner({ store, client, now = Date.now }) {
     listChanges(filter = {}) {
       return store.listChanges(filter)
     },
-    async readChange(changeId) {
+    async readChange(changeId, ownerSessionId) {
       const change = store.getChange(changeId)
       if (!change) {
         const error = new Error(`change not found: ${changeId}`)
         error.code = 'CHANGE_NOT_FOUND'
         throw error
       }
+      assertOwner(change, ownerSessionId, 'change')
       return change
     },
-    async reviewChange(changeId, action) {
-      const change = await this.readChange(changeId)
+    async reviewChange(changeId, action, ownerSessionId) {
+      const change = await this.readChange(changeId, ownerSessionId)
       const status = changeActionStatus(action)
       if (status === 'accepted') return store.updateChange(changeId, { status })
       const target = resolveTarget(store, change.hostId)
@@ -441,7 +459,7 @@ export function createRunner({ store, client, now = Date.now }) {
       const expectedVersion = status === 'restored' ? change.beforeVersion : change.afterVersion
       if (expectedVersion !== currentVersion) throw conflictError(expectedVersion, currentVersion)
       if (content === null || content === undefined) {
-        await client.deleteRemoteFile(target, change.path)
+        await client.deleteRemoteFile(target, change.path, currentVersion)
       } else {
         await client.writeRemoteFile(target, change.path, content, currentVersion)
       }
@@ -449,6 +467,24 @@ export function createRunner({ store, client, now = Date.now }) {
     },
     listJobs(filter) {
       return store.listJobs(filter)
+    },
+    async dispose() {
+      if (disposePromise) return disposePromise
+      disposed = true
+      disposePromise = (async () => {
+        for (const stop of preparingJobs.values()) stop('service_unload')
+        await Promise.allSettled([...activatingJobs.values()])
+        await refreshPromise?.catch(() => {})
+        const active = [...activeJobs.values()]
+        for (const job of active) {
+          job.setStopReason('service_unload')
+          await client.cancel?.(job.host, job.remoteJobId).catch(() => {})
+          job.controller.abort('service_unload')
+        }
+        await Promise.allSettled(active.map((job) => job.done))
+        await client.dispose?.()
+      })()
+      return disposePromise
     },
   }
 }

@@ -1,14 +1,21 @@
 import { createServer as createHttpServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
-import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, opendir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { createHostState } from './state.js'
 import { resolveDialect, runCommand } from '../executor.js'
+import { createKeyedLock } from '../async-key-lock.js'
+import { DEFAULT_MAX_REQUEST_BODY_BYTES, readJsonBody } from '../http-json.js'
+import { createWorkspacePathResolver } from './workspace-path.js'
+import { DEFAULT_MAX_PROCESS_OUTPUT_BYTES } from '../output-limits.js'
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost'])
 const MAX_REMOTE_FILE_BYTES = 10 * 1024 * 1024
+export const DEFAULT_CANCEL_TOMBSTONE_MS = 30 * 1000
+const DEFAULT_DIRECTORY_PAGE_SIZE = 100
+const MAX_DIRECTORY_PAGE_SIZE = 1000
 
 function codedError(code, message, status = 400, details = {}) {
   const error = new Error(message)
@@ -18,23 +25,12 @@ function codedError(code, message, status = 400, details = {}) {
   return error
 }
 
-function resolveWorkspacePath(root, requestedPath) {
-  const value = String(requestedPath ?? '').trim()
-  if (!value || value.includes('\0')) throw codedError('REMOTE_PATH_INVALID', '文件路径无效')
-  const resolvedRoot = path.resolve(root)
-  const resolved = path.resolve(resolvedRoot, value)
-  if (resolved !== resolvedRoot && !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
-    throw codedError('REMOTE_PATH_OUTSIDE_WORKSPACE', '文件路径超出 hostd 工作目录', 403)
-  }
-  return resolved
-}
-
 function contentVersion(content) {
   return createHash('sha256').update(content).digest('hex')
 }
 
-async function readWorkspaceFile(root, requestedPath) {
-  const filePath = resolveWorkspacePath(root, requestedPath)
+async function readWorkspaceFile(resolveWorkspacePath, requestedPath) {
+  const filePath = await resolveWorkspacePath(requestedPath)
   const attrs = await stat(filePath)
   if (attrs.size > MAX_REMOTE_FILE_BYTES) {
     throw codedError('REMOTE_FILE_TOO_LARGE', `远程文件超过 ${MAX_REMOTE_FILE_BYTES} 字节限制`, 413)
@@ -49,9 +45,9 @@ async function readWorkspaceFile(root, requestedPath) {
   }
 }
 
-async function currentWorkspaceVersion(root, requestedPath) {
+async function currentWorkspaceVersion(resolveWorkspacePath, requestedPath) {
   try {
-    return (await readWorkspaceFile(root, requestedPath)).version
+    return (await readWorkspaceFile(resolveWorkspacePath, requestedPath)).version
   } catch (error) {
     if (error?.code === 'ENOENT') return null
     throw error
@@ -83,13 +79,6 @@ function json(res, status, body) {
   res.end(payload)
 }
 
-async function readJsonBody(req) {
-  const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
-  if (chunks.length === 0) return {}
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
-}
-
 function bearerToken(req) {
   const header = req.headers.authorization ?? ''
   const match = /^Bearer\s+(.+)$/i.exec(header)
@@ -109,6 +98,22 @@ function fileRoute(method, pathname) {
 function execCancelMatch(pathname) {
   const match = /^\/v1\/exec\/([^/]+)\/cancel$/.exec(pathname)
   return match ? decodeURIComponent(match[1]) : null
+}
+
+function parseJobId(value) {
+  const jobId = String(value ?? randomUUID())
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(jobId)) {
+    throw codedError('HOSTD_JOB_ID_INVALID', '远程任务 ID 无效')
+  }
+  return jobId
+}
+
+function pageInteger(value, fallback, maximum = Number.MAX_SAFE_INTEGER, minimum = 0) {
+  const parsed = value === null ? fallback : Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < minimum) {
+    throw codedError('DIRECTORY_PAGE_INVALID', '目录分页参数无效')
+  }
+  return Math.min(parsed, maximum)
 }
 
 async function createServerInstance(options, listener) {
@@ -134,11 +139,26 @@ export async function startHostd(options = {}) {
   const state = await createHostState({ dataDir, now: options.now })
   const issued = state.issuePairingCode()
   const jobs = new Map()
+  const pendingCancels = new Map()
   const dialect = resolveDialect()
   const workspaceRoot = path.resolve(options.workspaceRoot ?? process.cwd())
+  const resolveWorkspacePath = await createWorkspacePathResolver(workspaceRoot)
+  const withWorkspaceMutation = createKeyedLock()
+  const maxRequestBodyBytes = options.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES
+  const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_PROCESS_OUTPUT_BYTES
+  const cancelTombstoneMs = options.cancelTombstoneMs ?? DEFAULT_CANCEL_TOMBSTONE_MS
+  if (!Number.isSafeInteger(cancelTombstoneMs) || cancelTombstoneMs < 1000) {
+    throw codedError('HOSTD_CANCEL_TOMBSTONE_INVALID', '取消墓碑时长必须是至少 1000ms 的整数', 500)
+  }
+
+  const consumePendingCancel = (jobId) => {
+    const expiresAt = pendingCancels.get(jobId)
+    pendingCancels.delete(jobId)
+    return expiresAt !== undefined && expiresAt > Date.now()
+  }
 
   const handlePair = async (req, res) => {
-    const body = await readJsonBody(req)
+    const body = await readJsonBody(req, maxRequestBodyBytes)
     try {
       const paired = state.pair(body.pairing_code)
       json(res, 200, {
@@ -170,97 +190,167 @@ export async function startHostd(options = {}) {
   }
 
   const handleExec = async (req, res) => {
-    const body = await readJsonBody(req)
-    const jobId = randomUUID()
-    const controller = new AbortController()
-    jobs.set(jobId, controller)
-    try {
-      const result = await runCommand({
-        command: body.command,
-        workdir: body.workdir,
-        timeoutMs: body.timeout_ms,
-        signal: controller.signal,
-        dialect,
-      })
+    const body = await readJsonBody(req, maxRequestBodyBytes)
+    const jobId = parseJobId(body.job_id)
+    if (jobs.has(jobId)) throw codedError('HOSTD_JOB_ID_CONFLICT', '远程任务 ID 已存在', 409)
+    if (consumePendingCancel(jobId)) {
       json(res, 200, {
         job_id: jobId,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exit_code: result.exitCode,
-        timed_out: result.timedOut,
-        aborted: result.aborted,
+        stdout: '',
+        stderr: '',
+        exit_code: null,
+        timed_out: false,
+        aborted: true,
+        abort_reason: 'cancel requested before execution started',
+        stdout_bytes: 0,
+        stderr_bytes: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
       })
+      return
+    }
+    const controller = new AbortController()
+    const abortOnDisconnect = () => {
+      if (!res.writableEnded) controller.abort('client disconnected')
+    }
+    req.once('aborted', abortOnDisconnect)
+    res.once('close', abortOnDisconnect)
+    const done = runCommand({
+      command: body.command,
+      workdir: body.workdir,
+      timeoutMs: body.timeout_ms,
+      signal: controller.signal,
+      dialect,
+      maxOutputBytes,
+    })
+    jobs.set(jobId, { controller, done })
+    try {
+      const result = await done
+      if (!res.destroyed && !res.writableEnded) {
+        json(res, 200, {
+          job_id: jobId,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exit_code: result.exitCode,
+          timed_out: result.timedOut,
+          aborted: result.aborted,
+          abort_reason: result.aborted ? controller.signal.reason : undefined,
+          stdout_bytes: result.stdoutBytes,
+          stderr_bytes: result.stderrBytes,
+          stdout_truncated: result.stdoutTruncated,
+          stderr_truncated: result.stderrTruncated,
+        })
+      }
     } finally {
+      req.removeListener('aborted', abortOnDisconnect)
+      res.removeListener('close', abortOnDisconnect)
       jobs.delete(jobId)
     }
   }
 
-  const handleCancel = (jobId, res) => {
-    const controller = jobs.get(jobId)
-    controller?.abort()
-    json(res, 200, { ok: true })
+  const handleCancel = async (jobId, res) => {
+    const job = jobs.get(jobId)
+    if (!job) {
+      pendingCancels.set(jobId, Date.now() + cancelTombstoneMs)
+      json(res, 202, { ok: true, status: 'cancel_requested', job_id: jobId })
+      return
+    }
+    job.controller.abort('cancel requested')
+    await job.done
+    json(res, 200, { ok: true, status: 'canceled', job_id: jobId })
   }
 
   const handleFiles = async (url, res) => {
     const requestedPath = url.searchParams.get('path') || workspaceRoot
-    const directory = resolveWorkspacePath(workspaceRoot, requestedPath)
-    const rows = await readdir(directory, { withFileTypes: true })
+    const directory = await resolveWorkspacePath(requestedPath)
+    const limit = pageInteger(url.searchParams.get('limit'), DEFAULT_DIRECTORY_PAGE_SIZE, MAX_DIRECTORY_PAGE_SIZE, 1)
+    const offset = pageInteger(url.searchParams.get('offset'), 0)
+    const rows = []
+    let index = 0
+    let hasMore = false
+    const directoryHandle = await opendir(directory)
+    for await (const entry of directoryHandle) {
+      if (entry.name.startsWith('.dsh-tmp-')) continue
+      if (index++ < offset) continue
+      if (rows.length === limit) { hasMore = true; break }
+      rows.push(entry)
+    }
     const entries = await Promise.all(rows.map(async (entry) => {
       const entryPath = path.join(directory, entry.name)
-      const attrs = await stat(entryPath)
+      const attrs = await lstat(entryPath)
       return {
         name: entry.name,
         path: entryPath,
-        type: entry.isDirectory() ? 'directory' : 'file',
+        type: entry.isSymbolicLink() ? 'symlink' : entry.isDirectory() ? 'directory' : 'file',
         size: attrs.size,
         mtime: attrs.mtimeMs,
         mode: attrs.mode,
       }
     }))
-    json(res, 200, { host_id: state.hostId, path: directory, entries })
+    json(res, 200, {
+      host_id: state.hostId,
+      path: directory,
+      entries,
+      ...(hasMore ? { next_offset: offset + entries.length } : {}),
+    })
   }
 
   const handleReadFile = async (url, res) => {
     const requestedPath = url.searchParams.get('path')
-    json(res, 200, { host_id: state.hostId, ...(await readWorkspaceFile(workspaceRoot, requestedPath)) })
+    json(res, 200, { host_id: state.hostId, ...(await readWorkspaceFile(resolveWorkspacePath, requestedPath)) })
   }
 
   const handleWriteFile = async (req, res) => {
-    const body = await readJsonBody(req)
-    const filePath = resolveWorkspacePath(workspaceRoot, body.path)
+    const body = await readJsonBody(req, maxRequestBodyBytes)
     const content = Buffer.from(String(body.content ?? ''), 'utf8')
     if (content.length > MAX_REMOTE_FILE_BYTES) {
       throw codedError('REMOTE_FILE_TOO_LARGE', `远程文件超过 ${MAX_REMOTE_FILE_BYTES} 字节限制`, 413)
     }
-    const currentVersion = await currentWorkspaceVersion(workspaceRoot, body.path)
-    if (body.expected_version !== undefined && body.expected_version !== currentVersion) {
-      throw codedError('REMOTE_FILE_CONFLICT', '远程文件已发生变化', 409, {
-        expectedVersion: body.expected_version,
-        currentVersion,
-      })
-    }
-    await mkdir(path.dirname(filePath), { recursive: true })
-    const temporaryPath = `${filePath}.dsh-tmp-${randomUUID()}`
-    try {
-      await writeFile(temporaryPath, content, { mode: 0o600 })
-      await rename(temporaryPath, filePath)
-    } finally {
-      await unlink(temporaryPath).catch(() => {})
-    }
+    const filePath = await resolveWorkspacePath(body.path)
+    await withWorkspaceMutation(workspaceRoot, async () => {
+      let lockedPath = await resolveWorkspacePath(body.path)
+      const currentVersion = await currentWorkspaceVersion(resolveWorkspacePath, body.path)
+      if (body.expected_version !== undefined && body.expected_version !== currentVersion) {
+        throw codedError('REMOTE_FILE_CONFLICT', '远程文件已发生变化', 409, {
+          expectedVersion: body.expected_version,
+          currentVersion,
+        })
+      }
+      await mkdir(path.dirname(lockedPath), { recursive: true })
+      lockedPath = await resolveWorkspacePath(body.path)
+      const temporaryPath = await resolveWorkspacePath(`.dsh-tmp-${randomUUID()}`)
+      try {
+        await writeFile(temporaryPath, content, { mode: 0o600 })
+        const publishPath = await resolveWorkspacePath(body.path)
+        if (publishPath !== lockedPath) {
+          throw codedError('REMOTE_PATH_CHANGED', '文件父目录在发布前发生变化', 409)
+        }
+        await rename(temporaryPath, publishPath)
+      } finally {
+        await unlink(temporaryPath).catch(() => {})
+      }
+    })
     json(res, 200, { path: filePath, size: content.length, version: contentVersion(content) })
   }
 
   const handleDeleteFile = async (req, res) => {
-    const body = await readJsonBody(req)
-    const filePath = resolveWorkspacePath(workspaceRoot, body.path)
-    const currentVersion = await currentWorkspaceVersion(workspaceRoot, body.path)
-    if (body.expected_version !== undefined && body.expected_version !== currentVersion) {
-      throw codedError('REMOTE_FILE_CONFLICT', '远程文件已发生变化', 409, {
-        expectedVersion: body.expected_version,
-        currentVersion,
-      })
-    }
-    await unlink(filePath)
+    const body = await readJsonBody(req, maxRequestBodyBytes)
+    const filePath = await resolveWorkspacePath(body.path)
+    await withWorkspaceMutation(workspaceRoot, async () => {
+      const lockedPath = await resolveWorkspacePath(body.path)
+      const currentVersion = await currentWorkspaceVersion(resolveWorkspacePath, body.path)
+      if (body.expected_version !== undefined && body.expected_version !== currentVersion) {
+        throw codedError('REMOTE_FILE_CONFLICT', '远程文件已发生变化', 409, {
+          expectedVersion: body.expected_version,
+          currentVersion,
+        })
+      }
+      const deletePath = await resolveWorkspacePath(body.path)
+      if (deletePath !== lockedPath) {
+        throw codedError('REMOTE_PATH_CHANGED', '文件父目录在删除前发生变化', 409)
+      }
+      await unlink(deletePath)
+    })
     json(res, 200, { path: filePath, deleted: true })
   }
 
@@ -282,7 +372,7 @@ export async function startHostd(options = {}) {
       }
       const cancelId = req.method === 'POST' ? execCancelMatch(url.pathname) : null
       if (cancelId !== null) {
-        if (requireAuth(req, res)) handleCancel(cancelId, res)
+        if (requireAuth(req, res)) await handleCancel(cancelId, res)
         return
       }
       if (fileRoute(req.method ?? 'GET', url.pathname)) {
@@ -321,7 +411,11 @@ export async function startHostd(options = {}) {
     issuePairingCode() {
       return state.issuePairingCode()
     },
-    close() {
+    async close() {
+      const active = [...jobs.values()]
+      for (const job of active) job.controller.abort('hostd closing')
+      await Promise.allSettled(active.map((job) => job.done))
+      pendingCancels.clear()
       return new Promise((resolve, reject) => {
         if (typeof server.closeAllConnections === 'function') {
           server.closeAllConnections()

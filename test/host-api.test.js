@@ -125,3 +125,19 @@ test('可改显示名、切目标、删除本机记录', async () => {
     await hostd.close()
   }
 })
+
+test('文件分页拒绝 NaN、小数和负数参数', async () => {
+  let listCalls = 0
+  const handle = createHostApiHandler({
+    runner: {
+      async listFiles() { listCalls += 1; return { hostId: 'h1', path: '/', entries: [] } },
+    },
+  })
+  for (const query of ['limit=NaN', 'limit=1.5', 'limit=-1', 'offset=NaN', 'offset=1.5', 'offset=-1']) {
+    const response = mockRes()
+    await handle(mockReq({ method: 'GET', url: `/remote-ops/v1/hosts/h1/files?${query}` }), response)
+    assert.equal(response.statusCode, 400, query)
+    assert.equal(response.body.code, 'PAGE_PARAMETER_INVALID', query)
+  }
+  assert.equal(listCalls, 0)
+})

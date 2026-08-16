@@ -15,6 +15,9 @@ function parseArgs(argv) {
     allowInsecure: args.includes('--allow-insecure'),
     tlsCert: readFlag(args, '--tls-cert'),
     tlsKey: readFlag(args, '--tls-key'),
+    maxRequestBodyBytes: Number(readFlag(args, '--max-request-body-bytes')) || undefined,
+    maxOutputBytes: Number(readFlag(args, '--max-output-bytes')) || undefined,
+    cancelTombstoneMs: Number(readFlag(args, '--cancel-tombstone-ms')) || undefined,
   }
 }
 

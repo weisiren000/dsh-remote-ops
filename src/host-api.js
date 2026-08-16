@@ -1,4 +1,5 @@
 const PREFIX = '/remote-ops/v1'
+import { DEFAULT_MAX_REQUEST_BODY_BYTES, readJsonBody } from './http-json.js'
 
 export function isLoopbackAddress(address) {
   return address === '127.0.0.1'
@@ -15,11 +16,13 @@ function json(res, status, body) {
   res.end(payload)
 }
 
-async function readJson(req) {
-  const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
-  if (chunks.length === 0) return {}
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+function pageInteger(params, name, fallback, minimum, maximum) {
+  const raw = params.get(name)
+  const value = raw === null ? fallback : Number(raw)
+  if (Number.isSafeInteger(value) && value >= minimum) return Math.min(value, maximum)
+  const error = new Error(`分页参数 ${name} 无效`)
+  error.code = 'PAGE_PARAMETER_INVALID'
+  throw error
 }
 
 function publicJob(job, log) {
@@ -38,6 +41,9 @@ function publicJob(job, log) {
     canceled_at: job.canceledAt ?? null,
     cancel_supported: job.cancelSupported,
     log: log ?? undefined,
+    log_bytes: job.logBytes,
+    log_truncated: job.logTruncated,
+    log_locator: job.logLocator,
   }
 }
 
@@ -143,7 +149,7 @@ function matchRoute(method, pathname) {
   return null
 }
 
-export function createHostApiHandler({ runner }) {
+export function createHostApiHandler({ runner, maxRequestBodyBytes = DEFAULT_MAX_REQUEST_BODY_BYTES }) {
   return async function handle(req, res) {
     if (!isLoopbackAddress(req.socket?.remoteAddress)) {
       json(res, 403, { error: 'loopback only', code: 'LOOPBACK_ONLY' })
@@ -173,7 +179,7 @@ export function createHostApiHandler({ runner }) {
         return
       }
       if (route.name === 'pair') {
-        const body = await readJson(req)
+        const body = await readJsonBody(req, maxRequestBodyBytes)
         const host = await runner.pair({
           address: body.address,
           pairingCode: body.pairing_code,
@@ -184,7 +190,7 @@ export function createHostApiHandler({ runner }) {
         return
       }
       if (route.name === 'connectSsh') {
-        const body = await readJson(req)
+        const body = await readJsonBody(req, maxRequestBodyBytes)
         const host = await runner.connectSsh({
           host: body.host,
           port: body.port,
@@ -204,7 +210,7 @@ export function createHostApiHandler({ runner }) {
         return
       }
       if (route.name === 'reconnect') {
-        const body = await readJson(req)
+        const body = await readJsonBody(req, maxRequestBodyBytes)
         const host = await runner.reconnectHost(route.hostId, {
           hostFingerprint: body.host_fingerprint,
         })
@@ -221,7 +227,7 @@ export function createHostApiHandler({ runner }) {
         return
       }
       if (route.name === 'update') {
-        const body = await readJson(req)
+        const body = await readJsonBody(req, maxRequestBodyBytes)
         const host = await runner.updateHost(route.hostId, {
           displayName: body.display_name,
         })
@@ -243,11 +249,14 @@ export function createHostApiHandler({ runner }) {
         return
       }
       if (route.name === 'files') {
-        const result = await runner.listFiles(route.hostId, url.searchParams.get('path') || undefined)
+        const limit = pageInteger(url.searchParams, 'limit', 100, 1, 1000)
+        const offset = pageInteger(url.searchParams, 'offset', 0, 0, Number.MAX_SAFE_INTEGER)
+        const result = await runner.listFiles(route.hostId, url.searchParams.get('path') || undefined, { limit, offset })
         json(res, 200, {
           host_id: result.hostId,
           path: result.path,
           entries: result.entries,
+          ...(result.nextOffset !== undefined ? { next_offset: result.nextOffset } : {}),
         })
         return
       }
@@ -264,7 +273,7 @@ export function createHostApiHandler({ runner }) {
         return
       }
       if (route.name === 'writeFile') {
-        const body = await readJson(req)
+        const body = await readJsonBody(req, maxRequestBodyBytes)
         const result = await runner.writeRemoteFile({
           host: route.hostId,
           path: body.path,
@@ -278,7 +287,7 @@ export function createHostApiHandler({ runner }) {
         return
       }
       if (route.name === 'deleteFile') {
-        const body = await readJson(req)
+        const body = await readJsonBody(req, maxRequestBodyBytes)
         const result = await runner.deleteRemoteFile({
           host: route.hostId,
           path: body.path,
@@ -290,7 +299,7 @@ export function createHostApiHandler({ runner }) {
         return
       }
       if (route.name === 'terminal') {
-        const body = await readJson(req)
+        const body = await readJsonBody(req, maxRequestBodyBytes)
         const result = await runner.exec({
           host: route.hostId,
           command: body.command,
@@ -306,7 +315,7 @@ export function createHostApiHandler({ runner }) {
           hostId: route.hostId,
           status: url.searchParams.get('status') || undefined,
           path: url.searchParams.get('path') || undefined,
-          limit: Math.min(200, Math.max(1, Number(url.searchParams.get('limit') ?? 50))),
+          limit: pageInteger(url.searchParams, 'limit', 50, 1, 200),
         })
         json(res, 200, { changes: changes.map(publicChange) })
         return
@@ -330,15 +339,17 @@ export function createHostApiHandler({ runner }) {
         return
       }
       if (route.name === 'log') {
-        const tail = Math.min(1_000_000, Math.max(1, Number(url.searchParams.get('tail') ?? 8192)))
+        const tail = pageInteger(url.searchParams, 'tail', 8192, 1, 1_000_000)
         const result = await runner.readJobLogTail(route.jobId, tail)
         json(res, 200, publicJob(result, result.log))
       }
     } catch (error) {
       const code = error?.code ?? 'REMOTE_OPS_ERROR'
-      const status = code === 'HOST_NOT_FOUND' || code === 'JOB_NOT_FOUND' || code === 'CHANGE_NOT_FOUND'
+      const status = error?.status ?? (code === 'HOST_NOT_FOUND' || code === 'JOB_NOT_FOUND' || code === 'CHANGE_NOT_FOUND'
         ? 404
-        : code === 'HOST_KEY_UNTRUSTED' || code === 'HOST_KEY_CHANGED'
+        : code === 'JOB_FORBIDDEN' || code === 'CHANGE_FORBIDDEN'
+          ? 403
+          : code === 'HOST_KEY_UNTRUSTED' || code === 'HOST_KEY_CHANGED'
           ? 409
           : code === 'SSH_CONNECT_FAILED' || code === 'SSH_AUTH_FAILED'
             ? 401
@@ -346,7 +357,7 @@ export function createHostApiHandler({ runner }) {
               ? 409
               : code === 'SSH_SFTP_FAILED'
                 ? 502
-                : 400
+                : 400)
       json(res, status, {
         error: error instanceof Error ? error.message : 'failed',
         code,
@@ -358,10 +369,10 @@ export function createHostApiHandler({ runner }) {
   }
 }
 
-export function registerHostApi(webServer, runner) {
+export function registerHostApi(webServer, runner, options = {}) {
   return webServer.register({
     kind: 'prefix',
     path: PREFIX,
-    handler: createHostApiHandler({ runner }),
+    handler: createHostApiHandler({ runner, maxRequestBodyBytes: options.maxRequestBodyBytes }),
   })
 }

@@ -8,6 +8,9 @@ import {
   readSftpFile,
   writeSftpFile,
 } from './sftp.js'
+import { execChannel } from './ssh-exec.js'
+
+export { execChannel } from './ssh-exec.js'
 
 const { Client, utils } = ssh2
 const DEFAULT_PORT = 22
@@ -106,79 +109,6 @@ function openConnection(config) {
   })
 }
 
-export function execChannel(connection, command, options = {}) {
-  return new Promise((resolve, reject) => {
-    let stream
-    let timer
-    let settled = false
-    let timedOut = false
-    let aborted = false
-    const stdout = []
-    const stderr = []
-    const cleanup = () => {
-      clearTimeout(timer)
-      options.signal?.removeEventListener('abort', onAbort)
-    }
-    const finishError = (error) => {
-      if (settled) return
-      settled = true
-      cleanup()
-      reject(error)
-    }
-    const onAbort = () => {
-      aborted = true
-      if (!stream) return
-      stream.signal('TERM')
-      stream.close()
-    }
-    options.signal?.addEventListener('abort', onAbort, { once: true })
-    connection.exec(command, (error, channel) => {
-      if (error) {
-        finishError(error)
-        return
-      }
-      stream = channel
-      const remoteJobId = options.remoteJobId ?? randomUUID()
-      options.onRemoteJobId?.(remoteJobId)
-      options.onChannel?.(channel, remoteJobId)
-      if (options.timeoutMs !== undefined) {
-        timer = setTimeout(() => {
-          timedOut = true
-          stream.signal('KILL')
-          stream.close()
-        }, options.timeoutMs)
-      }
-      stream.on('data', (chunk) => {
-        stdout.push(chunk)
-        options.onStdout?.(chunk)
-      })
-      stream.stderr.on('data', (chunk) => {
-        stderr.push(chunk)
-        options.onStderr?.(chunk)
-      })
-      stream.once('error', (streamError) => {
-        finishError(streamError)
-      })
-      stream.once('close', (exitCode, signal) => {
-        if (settled) return
-        settled = true
-        cleanup()
-        resolve({
-          stdout: Buffer.concat(stdout).toString('utf8'),
-          stderr: Buffer.concat(stderr).toString('utf8'),
-          exitCode: exitCode ?? (timedOut || aborted ? null : 1),
-          signal,
-          timedOut,
-          aborted,
-          remoteJobId,
-          streamed: true,
-        })
-      })
-      if (options.signal?.aborted) onAbort()
-    })
-  })
-}
-
 async function inspectRemote(connection) {
   const unix = await execChannel(connection, 'hostname; printf "\\n__DSH_CWD__%s\\n" "$PWD"; uname -s')
   const marker = unix.stdout.indexOf('\n__DSH_CWD__')
@@ -262,12 +192,36 @@ function publicKeyFromPrivate(privateKey) {
   return key?.getPublicSSH?.()
 }
 
-export function createSshClient({ keysDir }) {
+export function createSshClient({ keysDir, sftpLockStaleMs, openConnection: open = openConnection }) {
   const sessions = new Map()
   const connecting = new Map()
   const reconnectState = new Map()
   const activeChannels = new Map()
+  const disposal = new AbortController()
   let disposed = false
+  let disposePromise
+
+  const disposedError = () => codedError('SSH_CLIENT_DISPOSED', 'SSH 客户端已释放')
+  const assertActive = () => {
+    if (disposed) throw disposedError()
+  }
+  const waitForReconnect = (delayMs) => new Promise((resolve, reject) => {
+    if (disposal.signal.aborted) {
+      reject(disposedError())
+      return
+    }
+    const timer = setTimeout(finish, delayMs)
+    function finish() {
+      disposal.signal.removeEventListener('abort', cancel)
+      resolve()
+    }
+    function cancel() {
+      clearTimeout(timer)
+      disposal.signal.removeEventListener('abort', cancel)
+      reject(disposedError())
+    }
+    disposal.signal.addEventListener('abort', cancel, { once: true })
+  })
 
   const markReconnectFailure = (hostId) => {
     const state = reconnectState.get(hostId) ?? { attempts: 0, nextAt: 0 }
@@ -289,26 +243,30 @@ export function createSshClient({ keysDir }) {
   }
 
   const ensureSession = async (host) => {
-    if (disposed) throw codedError('SSH_CLIENT_DISPOSED', 'SSH 客户端已释放')
+    assertActive()
     const current = sessions.get(host.hostId)
     if (current) return current
-    const state = reconnectState.get(host.hostId)
-    if (state?.nextAt > Date.now()) {
-      await new Promise((resolve) => setTimeout(resolve, state.nextAt - Date.now()))
-    }
     const pending = connecting.get(host.hostId)
     if (pending) return pending
     const task = (async () => {
+      const state = reconnectState.get(host.hostId)
+      if (state?.nextAt > Date.now()) await waitForReconnect(state.nextAt - Date.now())
+      assertActive()
       const privateKey = await readFile(host.privateKeyPath, 'utf8').catch(() => {
         throw codedError('SSH_KEY_MISSING', '本机保存的 SSH 专用密钥不存在，请重新连接')
       })
-      const opened = await openConnection({
+      assertActive()
+      const opened = await open({
         sshHost: host.sshHost,
         port: host.sshPort,
         username: host.sshUsername,
         privateKey,
         hostFingerprint: host.hostFingerprint,
       })
+      if (disposed) {
+        opened.connection.end()
+        throw disposedError()
+      }
       rememberSession(host.hostId, opened.connection)
       reconnectState.delete(host.hostId)
       return opened.connection
@@ -317,7 +275,7 @@ export function createSshClient({ keysDir }) {
     try {
       return await task
     } catch (error) {
-      markReconnectFailure(host.hostId)
+      if (!disposed) markReconnectFailure(host.hostId)
       throw error
     } finally {
       if (connecting.get(host.hostId) === task) connecting.delete(host.hostId)
@@ -326,49 +284,66 @@ export function createSshClient({ keysDir }) {
 
   return {
     async connect(input) {
-      if (disposed) throw codedError('SSH_CLIENT_DISPOSED', 'SSH 客户端已释放')
+      assertActive()
       const target = normalizeConnection(input)
       if (!input.password) throw codedError('SSH_PASSWORD_REQUIRED', '请输入 SSH 登录密码')
-      const opened = await openConnection({
-        ...target,
-        password: input.password,
-        hostFingerprint: input.hostFingerprint,
-      })
       const hostId = randomUUID()
       const privateKeyPath = path.join(keysDir, `${hostId}.key`)
-      try {
-        const remote = await inspectRemote(opened.connection)
-        const keys = utils.generateKeyPairSync('ed25519', { comment: `dsh-remote-ops-${hostId}` })
-        await mkdir(keysDir, { recursive: true })
-        await writeFile(privateKeyPath, keys.private, { encoding: 'utf8', mode: 0o600 })
-        await installPublicKey(opened.connection, keys.public, remote.dialect)
-        const verified = await openConnection({
-          ...target,
-          privateKey: keys.private,
-          hostFingerprint: opened.fingerprint,
-        })
-        opened.connection.end()
-        rememberSession(hostId, verified.connection)
-        return {
-          hostId,
-          displayName: input.displayName || remote.hostname || target.sshHost,
-          address: `ssh://${target.sshHost}:${target.port}`,
-          transport: 'ssh',
-          sshHost: target.sshHost,
-          sshPort: target.port,
-          sshUsername: target.username,
-          hostFingerprint: opened.fingerprint,
-          privateKeyPath,
-          online: true,
-          cwd: input.workdir || remote.cwd,
-          os: remote.os,
-          dialect: remote.dialect,
-          lastHeartbeatAt: Date.now(),
+      const task = (async () => {
+        let opened
+        let verified
+        try {
+          opened = await open({
+            ...target,
+            password: input.password,
+            hostFingerprint: input.hostFingerprint,
+          })
+          assertActive()
+          const remote = await inspectRemote(opened.connection)
+          assertActive()
+          const keys = utils.generateKeyPairSync('ed25519', { comment: `dsh-remote-ops-${hostId}` })
+          await mkdir(keysDir, { recursive: true })
+          assertActive()
+          await writeFile(privateKeyPath, keys.private, { encoding: 'utf8', mode: 0o600 })
+          assertActive()
+          await installPublicKey(opened.connection, keys.public, remote.dialect)
+          assertActive()
+          verified = await open({
+            ...target,
+            privateKey: keys.private,
+            hostFingerprint: opened.fingerprint,
+          })
+          assertActive()
+          opened.connection.end()
+          rememberSession(hostId, verified.connection)
+          return {
+            hostId,
+            displayName: input.displayName || remote.hostname || target.sshHost,
+            address: `ssh://${target.sshHost}:${target.port}`,
+            transport: 'ssh',
+            sshHost: target.sshHost,
+            sshPort: target.port,
+            sshUsername: target.username,
+            hostFingerprint: opened.fingerprint,
+            privateKeyPath,
+            online: true,
+            cwd: input.workdir || remote.cwd,
+            os: remote.os,
+            dialect: remote.dialect,
+            lastHeartbeatAt: Date.now(),
+          }
+        } catch (error) {
+          opened?.connection?.end?.()
+          verified?.connection?.end?.()
+          await unlink(privateKeyPath).catch(() => {})
+          throw error
         }
-      } catch (error) {
-        opened.connection.end()
-        await unlink(privateKeyPath).catch(() => {})
-        throw error
+      })()
+      connecting.set(hostId, task)
+      try {
+        return await task
+      } finally {
+        if (connecting.get(hostId) === task) connecting.delete(hostId)
       }
     },
     async heartbeat(host) {
@@ -376,9 +351,9 @@ export function createSshClient({ keysDir }) {
       const remote = await inspectRemote(connection)
       return { hostId: host.hostId, ...remote, ts: Date.now() }
     },
-    async listDirectory(host, remotePath) {
+    async listDirectory(host, remotePath, options) {
       const connection = await ensureSession(host)
-      return listSftpDirectory(connection, remotePath || host.cwd || '.')
+      return listSftpDirectory(connection, remotePath || host.cwd || '.', options)
     },
     async readRemoteFile(host, remotePath) {
       const connection = await ensureSession(host)
@@ -386,11 +361,11 @@ export function createSshClient({ keysDir }) {
     },
     async writeRemoteFile(host, remotePath, content, expectedVersion) {
       const connection = await ensureSession(host)
-      return writeSftpFile(connection, remotePath, content, expectedVersion)
+      return writeSftpFile(connection, remotePath, content, expectedVersion, { staleMs: sftpLockStaleMs })
     },
-    async deleteRemoteFile(host, remotePath) {
+    async deleteRemoteFile(host, remotePath, expectedVersion) {
       const connection = await ensureSession(host)
-      return deleteSftpFile(connection, remotePath)
+      return deleteSftpFile(connection, remotePath, expectedVersion, { staleMs: sftpLockStaleMs })
     },
     async reconnect(host) {
       sessions.get(host.hostId)?.end()
@@ -415,9 +390,12 @@ export function createSshClient({ keysDir }) {
           spec.onRemoteJobId?.(remoteJobId)
         },
         onChannel(channel, remoteJobId) {
-          activeChannels.set(remoteJobId, { channel, hostId: host.hostId })
+          let resolveDone
+          const done = new Promise((resolve) => { resolveDone = resolve })
+          activeChannels.set(remoteJobId, { channel, hostId: host.hostId, done })
           channel.once('close', () => {
             if (activeChannels.get(remoteJobId)?.channel === channel) activeChannels.delete(remoteJobId)
+            resolveDone()
           })
         },
       })
@@ -428,6 +406,7 @@ export function createSshClient({ keysDir }) {
       if (!active || active.hostId !== host.hostId) return { supported: false, reason: 'SSH_CHANNEL_NOT_FOUND' }
       active.channel.signal('TERM')
       active.channel.close()
+      await active.done
       return { supported: true, remoteJobId }
     },
     async remove(host) {
@@ -457,12 +436,24 @@ export function createSshClient({ keysDir }) {
       if (host.privateKeyPath) await unlink(host.privateKeyPath).catch(() => {})
     },
     dispose() {
+      if (disposePromise) return disposePromise
       disposed = true
-      for (const connection of sessions.values()) connection.end()
-      sessions.clear()
-      connecting.clear()
-      reconnectState.clear()
-      activeChannels.clear()
+      disposal.abort()
+      disposePromise = (async () => {
+        const channels = [...activeChannels.values()]
+        for (const active of channels) {
+          active.channel.signal('KILL')
+          active.channel.close()
+        }
+        await Promise.allSettled(channels.map((active) => active.done))
+        await Promise.allSettled([...connecting.values()])
+        for (const connection of sessions.values()) connection.end()
+        sessions.clear()
+        connecting.clear()
+        reconnectState.clear()
+        activeChannels.clear()
+      })()
+      return disposePromise
     },
   }
 }

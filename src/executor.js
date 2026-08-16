@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createBoundedOutput, DEFAULT_MAX_PROCESS_OUTPUT_BYTES } from './output-limits.js'
 
 export function resolveDialect(platform = process.platform) {
   return platform === 'win32' ? 'pwsh' : 'bash'
@@ -40,8 +41,8 @@ export function runCommand(spec) {
     let timedOut = false
     let aborted = false
     let settled = false
-    const stdoutChunks = []
-    const stderrChunks = []
+    const stdout = createBoundedOutput(spec.maxOutputBytes ?? DEFAULT_MAX_PROCESS_OUTPUT_BYTES)
+    const stderr = createBoundedOutput(spec.maxOutputBytes ?? DEFAULT_MAX_PROCESS_OUTPUT_BYTES)
     const child = spawn(file, args, {
       cwd: spec.workdir,
       windowsHide: true,
@@ -53,9 +54,15 @@ export function runCommand(spec) {
       settled = true
       clearTimeout(timer)
       spec.signal?.removeEventListener('abort', onAbort)
+      const stdoutResult = stdout.snapshot()
+      const stderrResult = stderr.snapshot()
       resolve({
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
+        stdout: stdoutResult.text,
+        stderr: stderrResult.text,
+        stdoutBytes: stdoutResult.bytes,
+        stderrBytes: stderrResult.bytes,
+        stdoutTruncated: stdoutResult.truncated,
+        stderrTruncated: stderrResult.truncated,
         exitCode,
         signal: signalName,
         timedOut,
@@ -79,10 +86,12 @@ export function runCommand(spec) {
     }
 
     child.stdout.on('data', (chunk) => {
-      stdoutChunks.push(chunk)
+      stdout.add(chunk)
+      spec.onStdout?.(chunk)
     })
     child.stderr.on('data', (chunk) => {
-      stderrChunks.push(chunk)
+      stderr.add(chunk)
+      spec.onStderr?.(chunk)
     })
     child.on('error', (error) => {
       if (settled) return

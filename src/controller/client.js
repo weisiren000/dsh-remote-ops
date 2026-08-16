@@ -1,4 +1,5 @@
 import { createSshClient } from './ssh-client.js'
+import { DEFAULT_MAX_REQUEST_BODY_BYTES, readJsonResponse } from '../http-json.js'
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1'])
 
@@ -32,19 +33,14 @@ function assertAddress(address) {
   throw codedError('INSECURE_ADDRESS', `insecure address: ${address}`)
 }
 
-async function readJson(response) {
-  const text = await response.text()
-  return text ? JSON.parse(text) : {}
-}
-
-async function request(url, init) {
+async function request(url, init, maxResponseBodyBytes) {
   let response
   try {
     response = await fetch(url, init)
   } catch (error) {
     throw codedError(isConnectionRefused(error) ? 'ECONNREFUSED' : 'REMOTE_NETWORK', String(error), error)
   }
-  const body = await readJson(response)
+  const body = await readJsonResponse(response, maxResponseBodyBytes)
   if (!response.ok) {
     throw codedError(
       body.code ?? 'REMOTE_HTTP',
@@ -68,7 +64,11 @@ function authHeaders(host, extra = {}) {
 }
 
 export function createHostClient(options = {}) {
-  const ssh = createSshClient({ keysDir: options.keysDir })
+  const maxResponseBodyBytes = options.maxResponseBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES
+  const ssh = createSshClient({
+    keysDir: options.keysDir,
+    sftpLockStaleMs: options.sftpLockStaleMs,
+  })
   return {
     connectSsh: (input) => ssh.connect(input),
     async pair(address, pairingCode) {
@@ -77,7 +77,7 @@ export function createHostClient(options = {}) {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ pairing_code: pairingCode }),
-      })
+      }, maxResponseBodyBytes)
       return {
         hostId: body.host_id,
         deviceToken: body.device_token,
@@ -92,7 +92,7 @@ export function createHostClient(options = {}) {
       const url = assertAddress(host.address)
       const body = await request(new URL('/v1/heartbeat', url), {
         headers: authHeaders(host),
-      })
+      }, maxResponseBodyBytes)
       return {
         hostId: body.host_id,
         hostname: body.hostname,
@@ -113,37 +113,66 @@ export function createHostClient(options = {}) {
     async exec(host, spec) {
       if (host.transport === 'ssh') return ssh.exec(host, spec)
       const url = assertAddress(host.address)
-      const body = await request(new URL('/v1/exec', url), {
-        method: 'POST',
-        headers: authHeaders(host, { 'content-type': 'application/json' }),
-        body: JSON.stringify({
-          command: spec.command,
-          workdir: spec.workdir,
-          timeout_ms: spec.timeoutMs,
-        }),
-        signal: spec.signal,
-      })
-      return {
-        remoteJobId: body.job_id,
-        stdout: body.stdout,
-        stderr: body.stderr,
-        exitCode: body.exit_code,
-        timedOut: body.timed_out,
-        aborted: body.aborted,
+      const remoteJobId = spec.jobId
+      if (!remoteJobId) throw codedError('HOSTD_JOB_ID_REQUIRED', 'hostd 执行缺少稳定任务 ID')
+      if (spec.signal?.aborted) throw codedError('ABORTED', '远程命令在启动前已取消')
+      spec.onRemoteJobId?.(remoteJobId)
+      let cancelPromise
+      const onAbort = () => {
+        cancelPromise ??= this.cancel(host, remoteJobId).then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        )
+      }
+      spec.signal?.addEventListener('abort', onAbort, { once: true })
+      try {
+        const body = await request(new URL('/v1/exec', url), {
+          method: 'POST',
+          headers: authHeaders(host, { 'content-type': 'application/json' }),
+          body: JSON.stringify({
+            job_id: remoteJobId,
+            command: spec.command,
+            workdir: spec.workdir,
+            timeout_ms: spec.timeoutMs,
+          }),
+        }, maxResponseBodyBytes)
+        const cancellation = cancelPromise ? await cancelPromise : undefined
+        if (cancellation?.error && !body.aborted) throw cancellation.error
+        return {
+          remoteJobId: body.job_id,
+          stdout: body.stdout,
+          stderr: body.stderr,
+          exitCode: body.exit_code,
+          timedOut: body.timed_out,
+          aborted: body.aborted,
+          abortReason: body.abort_reason,
+          stdoutBytes: body.stdout_bytes,
+          stderrBytes: body.stderr_bytes,
+          stdoutTruncated: body.stdout_truncated,
+          stderrTruncated: body.stderr_truncated,
+        }
+      } finally {
+        spec.signal?.removeEventListener('abort', onAbort)
       }
     },
-    async listDirectory(host, remotePath) {
-      if (host.transport === 'ssh') return ssh.listDirectory(host, remotePath)
+    async listDirectory(host, remotePath, options = {}) {
+      if (host.transport === 'ssh') return ssh.listDirectory(host, remotePath, options)
       const url = assertAddress(host.address)
-      const query = new URLSearchParams({ path: remotePath || host.cwd || '.' })
-      const body = await request(new URL(`/v1/files?${query}`, url), { headers: authHeaders(host) })
-      return body.entries ?? body
+      const query = new URLSearchParams({
+        path: remotePath || host.cwd || '.',
+        limit: String(options.limit ?? 100),
+        offset: String(options.offset ?? 0),
+      })
+      const body = await request(new URL(`/v1/files?${query}`, url), { headers: authHeaders(host) }, maxResponseBodyBytes)
+      const entries = body.entries ?? body
+      if (body.next_offset !== undefined) entries.nextOffset = body.next_offset
+      return entries
     },
     async readRemoteFile(host, remotePath) {
       if (host.transport === 'ssh') return ssh.readRemoteFile(host, remotePath)
       const url = assertAddress(host.address)
       const query = new URLSearchParams({ path: remotePath })
-      return request(new URL(`/v1/file?${query}`, url), { headers: authHeaders(host) })
+      return request(new URL(`/v1/file?${query}`, url), { headers: authHeaders(host) }, maxResponseBodyBytes)
     },
     async writeRemoteFile(host, remotePath, content, expectedVersion) {
       if (host.transport === 'ssh') return ssh.writeRemoteFile(host, remotePath, content, expectedVersion)
@@ -152,7 +181,7 @@ export function createHostClient(options = {}) {
         method: 'PUT',
         headers: authHeaders(host, { 'content-type': 'application/json' }),
         body: JSON.stringify({ path: remotePath, content, expected_version: expectedVersion }),
-      })
+      }, maxResponseBodyBytes)
     },
     async deleteRemoteFile(host, remotePath, expectedVersion) {
       if (host.transport === 'ssh') return ssh.deleteRemoteFile(host, remotePath, expectedVersion)
@@ -161,7 +190,7 @@ export function createHostClient(options = {}) {
         method: 'DELETE',
         headers: authHeaders(host, { 'content-type': 'application/json' }),
         body: JSON.stringify({ path: remotePath, expected_version: expectedVersion }),
-      })
+      }, maxResponseBodyBytes)
     },
     async terminal(host, spec) {
       return this.exec(host, spec)
@@ -173,7 +202,7 @@ export function createHostClient(options = {}) {
       const result = await request(new URL(`/v1/exec/${remoteJobId}/cancel`, url), {
         method: 'POST',
         headers: authHeaders(host),
-      })
+      }, maxResponseBodyBytes)
       return { supported: result.ok !== false, ...result }
     },
     remove: (host) => host.transport === 'ssh' ? ssh.remove(host) : undefined,

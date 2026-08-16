@@ -42,3 +42,14 @@ test('runCommand 响应 AbortSignal', async () => {
   const result = await pending
   assert.equal(result.aborted, true)
 })
+
+test('runCommand 对超大 stdout 和 stderr 分别执行字节硬限制', async () => {
+  const command = `node -e "process.stdout.write('x'.repeat(200000));process.stderr.write('y'.repeat(200000))"`
+  const result = await runCommand({ command, dialect: resolveDialect(), maxOutputBytes: 1024 })
+  assert.ok(Buffer.byteLength(result.stdout) <= 1024)
+  assert.ok(Buffer.byteLength(result.stderr) <= 1024)
+  assert.equal(result.stdoutTruncated, true)
+  assert.equal(result.stderrTruncated, true)
+  assert.equal(result.stdoutBytes, 200000)
+  assert.equal(result.stderrBytes, 200000)
+})

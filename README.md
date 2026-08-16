@@ -12,66 +12,55 @@
 
 ## 安装
 
-### 前置条件
+### 从 GitHub 安装（推荐）
 
-- 已安装 [Git](https://git-scm.com/)、Node.js 和 pnpm。
-- DeepSeek Harness 已至少启动过一次，Web profile 已创建。
-
-### Windows
-
-在 PowerShell 中执行：
-
-```powershell
-$dshHome = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $env:USERPROFILE '.dsh' }
-$pluginDir = Join-Path $dshHome 'plugins\dsh-remote-ops'
-
-New-Item -ItemType Directory -Force -Path (Split-Path $pluginDir) | Out-Null
-git clone https://github.com/weisiren000/dsh-remote-ops.git $pluginDir
-pnpm --dir $pluginDir install
-pnpm --dir $pluginDir build:client
-npx @deepseek-ai/dsh plugin --profile web add file:../../plugins/dsh-remote-ops
-```
-
-### Linux / macOS
+安装当前稳定版本：
 
 ```bash
-DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
-PLUGIN_DIR="$DSH_HOME/plugins/dsh-remote-ops"
-
-mkdir -p "$DSH_HOME/plugins"
-git clone https://github.com/weisiren000/dsh-remote-ops.git "$PLUGIN_DIR"
-pnpm --dir "$PLUGIN_DIR" install
-pnpm --dir "$PLUGIN_DIR" build:client
-npx @deepseek-ai/dsh plugin --profile web add file:../../plugins/dsh-remote-ops
+dsh plugin --profile web add github:weisiren000/dsh-remote-ops#v0.0.6
 ```
 
-然后打开 `<DSH_HOME>/profiles/web/package.json`，在已有的 `dsh.profile.bundles` 数组中加入 `dsh-remote-ops`；保留原有的其他 bundle：
+DSH 会自动把插件安装到 Web profile，并将 `dsh-remote-ops` 注册到 `dsh.profile.bundles`。不需要克隆仓库、手动安装依赖、构建客户端或修改 profile 的 `package.json`。
 
-```json
-{
-  "dsh": {
-    "profile": {
-      "bundles": [
-        "@deepseek-ai/dsh-base",
-        "@deepseek-ai/dsh-web-app",
-        "dsh-remote-ops"
-      ]
-    }
-  }
-}
+如果系统没有全局 `dsh` 命令，可以通过 `npx` 执行：
+
+```bash
+npx @deepseek-ai/dsh plugin --profile web add github:weisiren000/dsh-remote-ops#v0.0.6
 ```
 
-上面的 JSON 只展示需要确认的结构，不要用它覆盖整个 profile 文件。
+安装命令需要本机可以使用 [Git](https://git-scm.com/) 和 pnpm。使用 `npx` 时还需要 Node.js。
 
-### 启动或重启 DSH
+### 启动或重启 DSH Web
 
-关闭旧的 DSH Web 进程后启动：
+关闭旧的 DSH Web 进程，然后重新启动：
 
-```powershell
-npx @deepseek-ai/dsh web --port 3080
+```bash
+dsh web
 ```
 
-浏览器打开 <http://127.0.0.1:3080>，进入“设置 → 插件 → 远程主机”。看到远程主机面板，说明插件已加载。
+使用 `npx` 的启动方式：
+
+```bash
+npx @deepseek-ai/dsh web
+```
+
+启动后进入“设置 → 插件 → 远程主机”。看到远程主机面板，说明插件已加载。
+
+### 升级
+
+发布新版本后，重新执行安装命令并替换 TAG：
+
+```bash
+dsh plugin --profile web add github:weisiren000/dsh-remote-ops#vX.Y.Z
+```
+
+随后重启 DSH Web。
+
+### 卸载
+
+```bash
+dsh plugin --profile web remove dsh-remote-ops
+```
 
 ### 连接远程机器
 
@@ -119,43 +108,6 @@ node /path/to/dsh-remote-ops/src/hostd/cli.js --listen 0.0.0.0:7680 --allow-inse
 ```
 
 终端会打印监听地址和配对码。不要把配对码提交到代码仓库或写入公开日志。
-
-## 让 Agent 自动安装
-
-不想手动执行上面的命令时，把下面整段提示词复制给本地编码 Agent。它会自行检测系统和 DSH profile，安装插件、重启 DSH 并做验收；执行本地安装时不能调用任何 `host_*` 远程工具。
-
-```text
-请在这台电脑上自动安装并启用 GitHub 仓库 https://github.com/weisiren000/dsh-remote-ops.git 的 DeepSeek Harness 插件。
-
-目标：
-1. 安装插件源码和依赖。
-2. 构建客户端 bundle。
-3. 把插件加入当前 DSH Web profile 的 dependencies 和 dsh.profile.bundles。
-4. 重启实际运行中的 DSH Web 服务。
-5. 用 HTTP 和文件哈希验证运行中的服务加载的是刚安装的源码。
-
-执行规则：
-- 这是本地安装任务，只使用当前机器的本地终端、文件系统和 Git。
-- 禁止调用 host_pair、host_list、host_use、host_bash、host_jobs、host_list_files、host_read_file、host_write_file、host_review_changes 或任何其他 host_* 工具。
-- 先检测操作系统、Node.js、pnpm、Git、DSH_HOME 和 DSH Web profile 的实际位置，不要猜路径、盘符、端口或进程。
-- DSH_HOME 优先使用环境变量 DSH_HOME；未设置时使用用户目录下的 .dsh。
-- 插件目录使用 <DSH_HOME>/plugins/dsh-remote-ops。目录不存在就 git clone；已经是该仓库就保留本地改动并更新依赖，不要删除整个目录。
-- 在插件目录执行 pnpm install 和 pnpm build:client。
-- 在 <DSH_HOME>/profiles/web 中安装 file:../../plugins/dsh-remote-ops，并用结构化 JSON 修改 package.json，确保 dsh.profile.bundles 包含 dsh-remote-ops；保留其他依赖和字段。
-- Windows 不要使用 `link:` 加本机绝对路径的依赖写法，也不要把 Bash 当作 PowerShell。使用 PowerShell 和原生 Windows 路径。
-- 找到真正运行 DSH Web 的进程后只重启该进程；不要杀掉所有 node 进程。若服务未运行，使用当前 profile 启动它并报告实际 URL、PID 和日志位置。
-- 不要提交、推送或重置仓库中的用户改动。
-
-验收要求：
-- 运行 node --test test/plugin-tools.test.js test/plugin-config.test.js test/client-bundle.test.js，并报告通过数。
-- 运行 git diff --check。
-- 检查 DSH 首页返回 HTTP 200，以及 /remote-ops/v1/hosts 返回 HTTP 200。
-- 检查 profile/node_modules/dsh-remote-ops/src/plugin/tools.js 与源码 src/plugin/tools.js 的 SHA-256 一致。
-- 创建一个新会话，确认 host_* 工具描述包含 Remote-only，且本地代码任务的默认工具仍是本地工具。
-- Windows 上不要用“极简模式”做验收；DSH 0.1.0-rc.6 的极简 preset 固定使用 Bash PTY，在 Win32 会报 terminal inspection is unsupported on platform win32。使用标准模式或创造模式。
-
-完成后只汇报：安装目录、profile、服务 URL/PID、验证结果和遇到的阻塞；不要只说“安装完成”而不提供证据。
-```
 
 ## 模型工具
 

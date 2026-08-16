@@ -13,6 +13,23 @@ async function bootHostd() {
   return startHostd({ dataDir, listen: '127.0.0.1:0', allowInsecure: true })
 }
 
+async function waitFor(check, timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const value = await check()
+    if (value) return value
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  throw new Error('等待远程任务状态超时')
+}
+
+function appendProbeCommand(filePath, dialect) {
+  if (dialect === 'pwsh') {
+    return `while ($true) { Add-Content -LiteralPath '${filePath.replaceAll("'", "''")}' -Value x; Start-Sleep -Milliseconds 30 }`
+  }
+  return `while true; do printf x >> '${filePath.replaceAll("'", "'\\''")}'; sleep 0.03; done`
+}
+
 test('双机配对、当前目标、并行、掉线和令牌轮换', async () => {
   const a = await bootHostd()
   const b = await bootHostd()
@@ -66,5 +83,35 @@ test('双机配对、当前目标、并行、掉线和令牌轮换', async () =>
     assert.equal(oldHb.status, 401)
   } finally {
     await b.close()
+  }
+})
+
+test('Runner 取消 hostd 任务后真实进程停止且主机保持在线', async () => {
+  const hostd = await bootHostd()
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ctrl-cancel-e2e-'))
+  const probe = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'runner-cancel-')), 'probe.log')
+  const store = await createControllerStore(dataDir)
+  const runner = createRunner({ store, client: createHostClient({ allowInsecureLoopback: true }) })
+  try {
+    const host = await runner.pair({ address: hostd.url, pairingCode: hostd.pairingCode, displayName: 'cancel-target' })
+    const pending = runner.exec({
+      host: host.hostId,
+      command: appendProbeCommand(probe, host.dialect),
+      description: 'cancel probe',
+      timeoutMs: 5_000,
+    })
+    const job = await waitFor(() => runner.listJobs({ hostId: host.hostId, status: 'running' })[0])
+    await waitFor(() => fs.stat(probe).then((attrs) => attrs.size > 0, () => false))
+    const canceled = await runner.cancelJob(job.jobId)
+    const result = await pending
+    assert.equal(canceled.status, 'canceled')
+    assert.equal(result.status, 'canceled')
+    assert.equal(store.getHost(host.hostId).status, 'online')
+    const stoppedAt = await fs.stat(probe).then((attrs) => attrs.size)
+    await new Promise((resolve) => setTimeout(resolve, 180))
+    assert.equal(await fs.stat(probe).then((attrs) => attrs.size), stoppedAt)
+  } finally {
+    await runner.dispose()
+    await hostd.close()
   }
 })

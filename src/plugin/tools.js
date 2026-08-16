@@ -1,64 +1,32 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { presentHostCall, presentHostResult, renderExecResult } from './render.js'
-
-const JOB_STATUSES = [
-  'running',
-  'succeeded',
-  'failed',
-  'canceled',
-  'timed_out',
-  'interrupted',
-]
-
-const JOB_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    jobId: { type: 'string', required: true },
-    hostId: { type: 'string', required: true },
-    command: { type: 'string', required: true },
-    description: { type: 'string', required: true },
-    status: { type: 'string', required: true, enum: JOB_STATUSES },
-    exitCode: { type: 'integer' },
-    startedAt: { type: 'number', required: true },
-    finishedAt: { type: 'number' },
-    approvalDenied: { type: 'boolean', required: true },
-    remoteJobId: { type: 'string' },
-    log: { type: 'string' },
-  },
-}
-
-const FILE_ENTRY_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    name: { type: 'string', required: true },
-    path: { type: 'string', required: true },
-    type: { type: 'string', required: true, enum: ['file', 'directory'] },
-    size: { type: 'number' },
-    mtime: { type: 'number' },
-    mode: { type: 'integer' },
-  },
-}
-
-const CHANGE_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    change_id: { type: 'string', required: true },
-    host_id: { type: 'string', required: true },
-    path: { type: 'string', required: true },
-    before_content: { type: 'string' },
-    after_content: { type: 'string' },
-    before_version: { type: 'string' },
-    after_version: { type: 'string' },
-    status: { type: 'string', required: true },
-    source: { type: 'string', required: true },
-    description: { type: 'string' },
-    created_at: { type: 'number', required: true },
-    updated_at: { type: 'number', required: true },
-  },
-}
+import { randomUUID } from 'node:crypto'
+import {
+  presentChangeResult,
+  presentChangeReviewCall,
+  presentFileWriteCall,
+  presentHostCall,
+  presentHostResult,
+  projectChangePresentation,
+  projectHostExecution,
+  renderExecResult,
+} from './render.js'
+import { registerRemoteToolPolicy } from './policy.js'
+import { registerLocatorTool } from './locator-tool.js'
+import {
+  CHANGE_SCHEMA,
+  MAX_MODEL_LIST_LIMIT,
+  REMOTE_FILE_SCHEMA,
+  FILE_ENTRY_SCHEMA,
+  JOB_SCHEMA,
+  JOB_STATUSES,
+  normalizeListLimit,
+  readBackgroundJob,
+  renderJson,
+  toChangeOutput,
+  toFileEntry,
+  toJobOutput,
+  toRemoteFileOutput,
+} from './tool-output.js'
 
 const REMOTE_TOOL_RULES = [
   'Remote host tools are opt-in and must never be used by default.',
@@ -68,78 +36,6 @@ const REMOTE_TOOL_RULES = [
   'Never probe drive letters, guessed directories, or remote hosts to recover from a local-tool failure.',
   'Remote tools are for the paired host selected by the user; do not retarget another host implicitly.',
 ].join(' ')
-
-function renderJson(_args, value) {
-  return [{ type: 'text', text: JSON.stringify(value, null, 2) }]
-}
-
-function toJobOutput(job) {
-  return {
-    jobId: job.jobId,
-    hostId: job.hostId,
-    command: job.command,
-    description: job.description,
-    status: job.status,
-    startedAt: job.startedAt,
-    approvalDenied: job.approvalDenied === true,
-    ...(job.exitCode !== undefined ? { exitCode: job.exitCode } : {}),
-    ...(job.finishedAt !== undefined ? { finishedAt: job.finishedAt } : {}),
-    ...(job.remoteJobId !== undefined ? { remoteJobId: job.remoteJobId } : {}),
-    ...(job.log !== undefined ? { log: job.log } : {}),
-  }
-}
-
-function toFileEntry(entry) {
-  return {
-    name: entry.name,
-    path: entry.path,
-    type: entry.type,
-    ...(entry.size != null ? { size: entry.size } : {}),
-    ...(entry.mtime != null ? { mtime: entry.mtime } : {}),
-    ...(entry.mode != null ? { mode: entry.mode } : {}),
-  }
-}
-
-function toChangeOutput(change) {
-  return {
-    change_id: change.changeId,
-    host_id: change.hostId,
-    path: change.path,
-    ...(change.beforeContent != null ? { before_content: change.beforeContent } : {}),
-    ...(change.afterContent != null ? { after_content: change.afterContent } : {}),
-    ...(change.beforeVersion != null ? { before_version: change.beforeVersion } : {}),
-    ...(change.afterVersion != null ? { after_version: change.afterVersion } : {}),
-    status: change.status,
-    source: change.source,
-    ...(change.description != null ? { description: change.description } : {}),
-    created_at: change.createdAt,
-    updated_at: change.updatedAt,
-  }
-}
-
-function readBackgroundJob(jobs, jobId, owner, meta) {
-  const read = jobs.read(jobId, owner)
-  const snapshot = read.snapshot ?? {}
-  const status = snapshot.status === 'completed'
-    ? 'succeeded'
-    : snapshot.status === 'killed'
-      ? 'canceled'
-      : snapshot.status === 'failed'
-        ? 'failed'
-        : 'running'
-  return {
-    jobId,
-    hostId: meta.hostId,
-    command: meta.command,
-    description: meta.description,
-    status,
-    startedAt: meta.startedAt,
-    ...(snapshot.finishedAt !== undefined ? { finishedAt: snapshot.finishedAt } : {}),
-    approvalDenied: false,
-    ...(read.text ? { log: read.text } : {}),
-    ...(snapshot.detail ? { errorMessage: snapshot.detail } : {}),
-  }
-}
 
 function codedError(code, message) {
   const error = new Error(message)
@@ -157,9 +53,8 @@ function formatHosts(hosts, currentHostId) {
   }))
 }
 
-async function requireHost(runner, requestedHost) {
+async function requireHost(runner, requestedHost, agent, agentTargets) {
   const hosts = await runner.list()
-  const current = runner.getCurrentHost?.() ?? null
   if (requestedHost) {
     if (hosts.some((host) => host.hostId === requestedHost)) return requestedHost
     // 与 resolveTarget 一致：显示名重名时拒绝，避免静默选中第一台。
@@ -171,7 +66,8 @@ async function requireHost(runner, requestedHost) {
     }
     return requestedHost
   }
-  if (current) return current.hostId
+  const scoped = agent ? agentTargets.get(agent) : undefined
+  if (scoped && hosts.some((host) => host.hostId === scoped)) return scoped
   if (hosts.length === 1) return hosts[0].hostId
   if (hosts.length === 0) throw codedError('HOST_NOT_FOUND', 'host not found')
   const listed = hosts.map((host) => `${host.displayName} (${host.hostId})`).join(', ')
@@ -183,9 +79,21 @@ function toolError(error) {
   throw error
 }
 
-export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExecute }) {
+export function registerHostTools({
+  tools,
+  systemPrompt,
+  runner,
+  jobs,
+  getJobs,
+  onPreExecute,
+  maxInlineOutputBytes,
+}) {
   const register = (definition) => tools.register(defineTool(definition))
   const backgroundMeta = new Map()
+  const agentTargets = new WeakMap()
+  const currentJobs = () => getJobs?.() ?? jobs
+  registerRemoteToolPolicy({ tools, onPreExecute })
+  registerLocatorTool(register, runner, maxInlineOutputBytes)
 
   if (systemPrompt?.section) {
     systemPrompt.section({
@@ -215,12 +123,13 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
       },
       render: renderJson,
     },
-    async execute(args) {
+    async execute(args, exec) {
       const host = await runner.pair({
         address: args.address,
         pairingCode: args.pairing_code,
         displayName: args.display_name,
       })
+      if (exec?.agent) agentTargets.set(exec.agent, host.hostId)
       return { host_id: host.hostId, display_name: host.displayName, dialect: host.dialect }
     },
   })
@@ -252,10 +161,9 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
       },
       render: renderJson,
     },
-    async execute() {
+    async execute(_args, exec) {
       const hosts = await runner.list()
-      const current = runner.getCurrentHost?.()
-      return { hosts: formatHosts(hosts, current?.hostId ?? null) }
+      return { hosts: formatHosts(hosts, exec?.agent ? agentTargets.get(exec.agent) ?? null : null) }
     },
   })
   register({
@@ -275,8 +183,12 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
       },
       render: renderJson,
     },
-    async execute(args) {
-      const host = await runner.use(args.host)
+    async execute(args, exec) {
+      if (!exec?.agent) throw codedError('REMOTE_AGENT_REQUIRED', 'host_use requires an Agent execution context')
+      const hostId = await requireHost(runner, args.host, exec.agent, agentTargets)
+      const host = runner.resolveHost?.(hostId, { allowOffline: true })
+        ?? (await runner.list()).find((item) => item.hostId === hostId)
+      agentTargets.set(exec.agent, hostId)
       return { host_id: host.hostId, display_name: host.displayName }
     },
   })
@@ -297,7 +209,10 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
           {
             type: 'object',
             additionalProperties: false,
-            properties: { job_id: { type: 'string', required: true } },
+            properties: {
+              job_id: { type: 'string', required: true },
+              dsh_job_id: { type: 'string', required: true },
+            },
           },
           {
             type: 'object',
@@ -314,26 +229,34 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
         type: 'text',
         text: value.text ?? `started background job ${value.job_id}`,
       }],
+      presentationMeta: projectHostExecution,
     },
     presentCall: presentHostCall,
     presentResult: presentHostResult,
     async execute(args, exec) {
       try {
-        const host = await requireHost(runner, args.host)
-        if (args.run_in_background === true && jobs?.start) {
-          const jobId = jobs.start({
+        const host = await requireHost(runner, args.host, exec.agent, agentTargets)
+        const jobService = currentJobs()
+        if (args.run_in_background === true && !jobService?.start) {
+          throw codedError('BACKGROUND_JOBS_UNAVAILABLE', '后台任务能力未安装，不能静默改为前台执行')
+        }
+        if (args.run_in_background === true) {
+          const controllerJobId = randomUUID()
+          const dshJobId = jobService.start({
             kind: 'host-bash',
             label: args.description,
             ...(exec.agent ? { owner: exec.agent } : {}),
             run() {
               const controller = new AbortController()
               const done = runner.exec({
+                jobId: controllerJobId,
                 host,
                 command: args.command,
                 description: args.description,
                 workdir: args.workdir,
                 timeoutMs: args.timeoutMs,
                 signal: controller.signal,
+                ownerSessionId: exec.agent?.id,
               })
               return {
                 cancel() {
@@ -347,13 +270,16 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
               }
             },
           })
-          backgroundMeta.set(jobId, {
+          await runner.linkDshJob?.(controllerJobId, dshJobId)
+          backgroundMeta.set(dshJobId, {
+            controllerJobId,
             hostId: host.hostId,
             command: args.command,
             description: args.description,
             startedAt: Date.now(),
+            ownerSessionId: exec.agent?.id,
           })
-          return { job_id: jobId }
+          return { job_id: controllerJobId, dsh_job_id: dshJobId }
         }
         const result = await runner.exec({
           host,
@@ -362,6 +288,7 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
           workdir: args.workdir,
           timeoutMs: args.timeoutMs,
           signal: exec.signal,
+          ownerSessionId: exec.agent?.id,
         })
         return {
           text: renderExecResult({ ...result, stdout: result.log ?? result.stdout ?? '' }),
@@ -386,30 +313,45 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
       render: renderJson,
     },
     async execute(args, exec) {
+      const jobService = currentJobs()
       if (args.job_id) {
         try {
-          return toJobOutput(await runner.readJob(args.job_id))
+          return toJobOutput(await runner.readJob(args.job_id, exec?.agent?.id), maxInlineOutputBytes)
         } catch (error) {
-          if (!jobs?.read || !backgroundMeta.has(args.job_id)) throw error
-          return toJobOutput(await readBackgroundJob(jobs, args.job_id, exec?.agent, backgroundMeta.get(args.job_id)))
+          if (!jobService?.read || !backgroundMeta.has(args.job_id)) throw error
+          return toJobOutput(
+            await readBackgroundJob(jobService, args.job_id, exec?.agent, backgroundMeta.get(args.job_id)),
+            maxInlineOutputBytes,
+          )
         }
       }
-      return runner.listJobs({ hostId: args.host, limit: args.limit }).map(toJobOutput)
+      const limit = normalizeListLimit(args.limit)
+      return runner.listJobs({ hostId: args.host, limit, ownerSessionId: exec?.agent?.id })
+        .map((job) => toJobOutput(job, maxInlineOutputBytes))
     },
   })
   register({
     name: 'host_job_log',
-    description: 'Remote-only: read one remote job log. Long logs are truncated with a file locator.',
+    description: 'Remote-only: read a bounded tail of one remote job log. Truncated results include a structured locator.',
     parameters: {
       job_id: { type: 'string', required: true, description: 'Remote job id.' },
+      tail_bytes: { type: 'integer', description: 'UTF-8 byte tail to return, capped by the inline output limit.' },
     },
     output: { schema: JOB_SCHEMA, render: renderJson },
     async execute(args, exec) {
+      const jobService = currentJobs()
       try {
-        return toJobOutput(await runner.readJob(args.job_id))
+        const tailBytes = Math.min(maxInlineOutputBytes ?? 64 * 1024, Math.max(1, args.tail_bytes ?? 64 * 1024))
+        return toJobOutput(
+          await runner.readJobLogTail(args.job_id, tailBytes, exec?.agent?.id),
+          maxInlineOutputBytes,
+        )
       } catch (error) {
-        if (!jobs?.read || !backgroundMeta.has(args.job_id)) throw error
-        return toJobOutput(await readBackgroundJob(jobs, args.job_id, exec?.agent, backgroundMeta.get(args.job_id)))
+        if (!jobService?.read || !backgroundMeta.has(args.job_id)) throw error
+        return toJobOutput(
+          await readBackgroundJob(jobService, args.job_id, exec?.agent, backgroundMeta.get(args.job_id)),
+          maxInlineOutputBytes,
+        )
       }
     },
   })
@@ -419,16 +361,20 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
     parameters: {
       host: { type: 'string', description: 'Host id or unique display name.' },
       path: { type: 'string', description: 'Remote directory path.' },
+      limit: { type: 'integer', description: `Maximum entries; defaults to 100 and is capped at ${MAX_MODEL_LIST_LIMIT}.` },
+      offset: { type: 'integer', description: 'Directory entry offset for the next page.' },
     },
-    output: { schema: { type: 'object', additionalProperties: false, properties: { host_id: { type: 'string', required: true }, path: { type: 'string', required: true }, entries: { type: 'array', required: true, items: FILE_ENTRY_SCHEMA } } }, render: renderJson },
-    async execute(args) {
+    output: { schema: { type: 'object', additionalProperties: false, properties: { host_id: { type: 'string', required: true }, path: { type: 'string', required: true }, entries: { type: 'array', required: true, items: FILE_ENTRY_SCHEMA }, next_offset: { type: 'integer' } } }, render: renderJson },
+    async execute(args, exec) {
       try {
-        const host = await requireHost(runner, args.host)
-        const result = await runner.listFiles(host, args.path)
+        const host = await requireHost(runner, args.host, exec?.agent, agentTargets)
+        const limit = normalizeListLimit(args.limit)
+        const result = await runner.listFiles(host, args.path, { limit, offset: Math.max(0, args.offset ?? 0) })
         return {
           host_id: result.hostId,
           path: result.path,
           entries: result.entries.map(toFileEntry),
+          ...(result.nextOffset !== undefined ? { next_offset: result.nextOffset } : {}),
         }
       } catch (error) {
         toolError(error)
@@ -442,17 +388,12 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
       host: { type: 'string', description: 'Host id or unique display name.' },
       path: { type: 'string', required: true, description: 'Remote file path.' },
     },
-    output: { schema: { type: 'object', additionalProperties: false, properties: { host_id: { type: 'string', required: true }, path: { type: 'string', required: true }, content: { type: 'string', required: true }, version: { type: 'string', required: true } } }, render: renderJson },
-    async execute(args) {
+    output: { schema: REMOTE_FILE_SCHEMA, render: renderJson },
+    async execute(args, exec) {
       try {
-        const host = await requireHost(runner, args.host)
+        const host = await requireHost(runner, args.host, exec?.agent, agentTargets)
         const result = await runner.readRemoteFile(host, args.path)
-        return {
-          host_id: result.hostId,
-          path: result.path,
-          content: result.content,
-          version: result.version,
-        }
+        return toRemoteFileOutput(result, maxInlineOutputBytes)
       } catch (error) {
         toolError(error)
       }
@@ -468,12 +409,14 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
       expected_version: { type: 'string', description: 'Version returned by host_read_file.' },
       description: { type: 'string', description: 'Reason for the change.' },
     },
-    output: { schema: CHANGE_SCHEMA, render: renderJson },
-    async execute(args) {
+    output: { schema: CHANGE_SCHEMA, render: renderJson, presentationMeta: projectChangePresentation },
+    presentCall: presentFileWriteCall,
+    presentResult: presentChangeResult,
+    async execute(args, exec) {
       try {
-        const host = await requireHost(runner, args.host)
-        const change = await runner.writeRemoteFile({ host, path: args.path, content: args.content, expectedVersion: args.expected_version, source: 'ai', description: args.description })
-        return toChangeOutput(change)
+        const host = await requireHost(runner, args.host, exec?.agent, agentTargets)
+        const change = await runner.writeRemoteFile({ host, path: args.path, content: args.content, expectedVersion: args.expected_version, source: 'ai', description: args.description, ownerSessionId: exec?.agent?.id })
+        return toChangeOutput(change, maxInlineOutputBytes)
       } catch (error) {
         toolError(error)
       }
@@ -504,16 +447,23 @@ export function registerHostTools({ tools, systemPrompt, runner, jobs, onPreExec
         ],
       },
       render: renderJson,
+      presentationMeta: projectChangePresentation,
     },
-    async execute(args) {
+    presentCall: presentChangeReviewCall,
+    presentResult: presentChangeResult,
+    async execute(args, exec) {
       try {
         if (args.change_id) {
           if (!args.action) throw codedError('CHANGE_ACTION_REQUIRED', 'action required when change_id is provided')
-          return toChangeOutput(await runner.reviewChange(args.change_id, args.action))
+          return toChangeOutput(
+            await runner.reviewChange(args.change_id, args.action, exec?.agent?.id),
+            maxInlineOutputBytes,
+          )
         }
-        const host = await requireHost(runner, args.host)
-        const changes = runner.listChanges({ hostId: host, status: args.status, limit: args.limit })
-        return { host_id: host, changes: changes.map(toChangeOutput) }
+        const host = await requireHost(runner, args.host, exec?.agent, agentTargets)
+        const limit = normalizeListLimit(args.limit)
+        const changes = runner.listChanges({ hostId: host, status: args.status, limit, ownerSessionId: exec?.agent?.id })
+        return { host_id: host, changes: changes.map((change) => toChangeOutput(change, maxInlineOutputBytes, false)) }
       } catch (error) {
         toolError(error)
       }
