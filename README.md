@@ -21,7 +21,7 @@
 安装当前稳定版本：
 
 ```bash
-dsh plugin --profile web add github:weisiren000/dsh-remote-ssh-ops#v0.0.10
+dsh plugin --profile web add github:weisiren000/dsh-remote-ssh-ops#v0.0.11
 ```
 
 DSH 会自动把插件安装到 Web profile，并将 `dsh-remote-ssh-ops` 注册到 `dsh.profile.bundles`。不需要克隆仓库、手动安装依赖、构建客户端或修改 profile 的 `package.json`。
@@ -29,7 +29,7 @@ DSH 会自动把插件安装到 Web profile，并将 `dsh-remote-ssh-ops` 注册
 如果系统没有全局 `dsh` 命令，可以通过 `npx` 执行：
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add github:weisiren000/dsh-remote-ssh-ops#v0.0.10
+npx @deepseek-ai/dsh plugin --profile web add github:weisiren000/dsh-remote-ssh-ops#v0.0.11
 ```
 
 安装命令需要本机可以使用 [Git](https://git-scm.com/) 和 pnpm。使用 `npx` 时还需要 Node.js。
