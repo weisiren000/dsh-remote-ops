@@ -17,6 +17,7 @@ test('hostd 默认数据写入新项目目录', async () => {
   const fakeHome = await tempDir()
   const stateUrl = new URL('../src/hostd/state.js', import.meta.url).href
   const script = `import { createHostState } from ${JSON.stringify(stateUrl)}; await createHostState()`
+  const legacyDataDirName = ['remote', 'ops'].join('-')
 
   await execFileAsync(process.execPath, ['--input-type=module', '--eval', script], {
     env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome },
@@ -24,7 +25,7 @@ test('hostd 默认数据写入新项目目录', async () => {
 
   await fs.access(path.join(fakeHome, '.dsh', 'remote-ssh-ops', 'hostd', 'host.json'))
   await assert.rejects(
-    fs.access(path.join(fakeHome, '.dsh', 'remote-ops', 'hostd', 'host.json')),
+    fs.access(path.join(fakeHome, '.dsh', legacyDataDirName, 'hostd', 'host.json')),
     { code: 'ENOENT' },
   )
 })

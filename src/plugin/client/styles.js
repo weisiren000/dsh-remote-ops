@@ -1,6 +1,6 @@
 export const CSS = `
-  .remoteWorkspace, .remoteWorkspace__launcher, .remoteOps { --ro-bg: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, #fff)); --ro-panel: var(--dsw-alias-bg-module-platform, #f5f6f7); --ro-panel-2: var(--dsw-alias-interactive-bg-hover-solid, #f1f3f5); --ro-active: var(--dsw-alias-button-ghost-active-fill, #ebeef2); --ro-hover: var(--dsw-alias-interactive-bg-hover, rgba(38,49,72,.06)); --ro-code-bg: var(--dsw-alias-markdown-code-block, #f9fafb); --ro-menu-bg: var(--dsw-specific-menu, var(--ro-bg)); --ro-input-bg: var(--dsw-specific-input-major, var(--ro-bg)); --ro-line: var(--dsw-alias-border-l2, rgba(0,0,0,.1)); --ro-text: var(--dsw-alias-label-primary, #0f1115); --ro-muted: var(--dsw-alias-label-secondary, #61666b); --ro-dim: var(--dsw-alias-label-tertiary, #81858c); --ro-accent: var(--dsw-alias-state-business-primary, #4176e6); --ro-danger: var(--dsw-alias-state-error-primary, #ec1313); --ro-success: var(--dsw-alias-state-success-primary, #22c55e); color: var(--ro-text); }
-  .remoteOps * , .remoteWorkspace * { box-sizing: border-box; }
+  .remoteWorkspace, .remoteWorkspace__launcher, .remoteSshOps { --ro-bg: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, #fff)); --ro-panel: var(--dsw-alias-bg-module-platform, #f5f6f7); --ro-panel-2: var(--dsw-alias-interactive-bg-hover-solid, #f1f3f5); --ro-active: var(--dsw-alias-button-ghost-active-fill, #ebeef2); --ro-hover: var(--dsw-alias-interactive-bg-hover, rgba(38,49,72,.06)); --ro-code-bg: var(--dsw-alias-markdown-code-block, #f9fafb); --ro-menu-bg: var(--dsw-specific-menu, var(--ro-bg)); --ro-input-bg: var(--dsw-specific-input-major, var(--ro-bg)); --ro-line: var(--dsw-alias-border-l2, rgba(0,0,0,.1)); --ro-text: var(--dsw-alias-label-primary, #0f1115); --ro-muted: var(--dsw-alias-label-secondary, #61666b); --ro-dim: var(--dsw-alias-label-tertiary, #81858c); --ro-accent: var(--dsw-alias-state-business-primary, #4176e6); --ro-danger: var(--dsw-alias-state-error-primary, #ec1313); --ro-success: var(--dsw-alias-state-success-primary, #22c55e); color: var(--ro-text); }
+  .remoteSshOps * , .remoteWorkspace * { box-sizing: border-box; }
   .remoteWorkspace { background: var(--ro-bg); border-left: 1px solid var(--ro-line); color-scheme: light dark; display: flex; flex-direction: column; height: 100vh; inset: 0 0 0 var(--ro-workspace-left, 50vw); min-width: 300px; position: fixed; z-index: 2; }
   .remoteWorkspace__head { align-items: center; background: var(--ro-bg); border-bottom: 1px solid var(--ro-line); display: flex; height: 44px; justify-content: space-between; padding: 0 12px 0 16px; }
   .remoteWorkspace__identity { align-items: center; display: flex; gap: 9px; min-width: 0; }
@@ -10,7 +10,7 @@ export const CSS = `
   .remoteWorkspace__button { align-items: center; appearance: none; background: transparent; border: 1px solid var(--ro-line); border-radius: 6px; color: var(--ro-muted); cursor: pointer; display: inline-flex; font: inherit; font-size: 12px; gap: 6px; height: 30px; justify-content: center; padding: 0 9px; }
   .remoteWorkspace__launcherButton, .remoteWorkspace__headButton { height: 30px; }
   .remoteWorkspace__saveButton { min-width: 74px; }
-  .remoteWorkspace__port, .remoteOps__port { min-width: 0; }
+  .remoteWorkspace__port, .remoteSshOps__port { min-width: 0; }
   .remoteWorkspace__button:hover:not(:disabled), .remoteWorkspace__button[data-active='true'] { background: var(--ro-hover); color: var(--ro-text); }
   .remoteWorkspace__button:disabled { cursor: default; opacity: .45; }
   .remoteWorkspace__workspace { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr) 5px var(--ro-explorer-width, 320px); min-height: 0; }
@@ -86,70 +86,70 @@ export const CSS = `
   @media (max-width: 1100px) { .remoteWorkspace { inset: 0 0 0 max(280px, var(--ro-workspace-left, 50vw)); } .remoteWorkspace__workspace { grid-template-columns: minmax(0, 1fr) 5px minmax(220px, var(--ro-explorer-width, 250px)); } }
   @media (max-width: 760px) { .remoteWorkspace { inset: 0; } }
   @media (max-width: 620px) { .remoteWorkspace__explorer { display: none; } }
-  .remoteOps { display: flex; flex-direction: column; gap: 20px; max-width: 920px; padding: 4px 0 30px; }
-  .remoteOps__settingsHead, .remoteOps__hostCardHead, .remoteOps__hostActions, .remoteOps__sectionTitle { align-items: center; display: flex; justify-content: space-between; gap: 12px; }
-  .remoteOps__settingsHead h2 { font-size: 18px; margin: 0; }
-  .remoteOps__settingsHead p { color: var(--ro-muted); font-size: 12px; margin: 4px 0 0; }
-  .remoteOps__overview { border-bottom: 1px solid var(--ro-line); border-top: 1px solid var(--ro-line); display: grid; grid-template-columns: repeat(3, 1fr); }
-  .remoteOps__overview div { display: flex; flex-direction: column; gap: 5px; padding: 13px 16px; }
-  .remoteOps__overview div + div { border-left: 1px solid var(--ro-line); }
-  .remoteOps__overview span { color: var(--ro-dim); font-size: 11px; }
-  .remoteOps__overview strong { font-size: 13px; font-weight: 600; }
-  .remoteOps__iconButton, .remoteOps__modeSwitch button, .remoteOps__hostActions button, .remoteOps__cancel { cursor: pointer; font-size: 12px; min-height: 30px; }
-  .remoteOps__modeSwitch { background: var(--ro-panel); border: 1px solid var(--ro-line); border-radius: 7px; display: inline-flex; padding: 2px; width: max-content; }
-  .remoteOps__modeSwitch button[data-active='true'] { background: var(--ro-panel-2); color: var(--ro-text); }
-  .remoteOps__connectForm { background: var(--ro-panel); border: 1px solid var(--ro-line); border-radius: 8px; display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 16px; }
-  .remoteOps__field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-  .remoteOps__field > span { color: var(--ro-muted); font-size: 11px; }
-  .remoteOps__field > span:not(:first-child), .remoteOps__field input { min-width: 0; width: 100%; }
-  .remoteOps__endpoint { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) 92px; }
-  .remoteOps__connectForm input, .remoteOps__sectionTitle select { color: var(--ro-text); font: inherit; font-size: 12px; }
-  .remoteOps__sectionTitle select { background: var(--ro-bg); border: 1px solid var(--ro-line); border-radius: 6px; height: 30px; padding: 0 9px; }
-  .remoteOps__formFooter { align-items: center; border-top: 1px solid var(--ro-line); color: var(--ro-dim); display: flex; font-size: 11px; justify-content: space-between; padding-top: 12px; }
-  .remoteOps__wideInput { grid-column: 1 / -1; }
-  .remoteOps__primary { cursor: pointer; font-size: 12px; font-weight: 600; min-width: 92px; }
-  .remoteOps__primary:disabled { cursor: default; opacity: .45; }
-  .remoteOps__notice { border-radius: 6px; font-size: 12px; padding: 9px 12px; }
-  .remoteOps__notice--error { background: var(--dsw-alias-state-error-secondary, #fff0ef); color: var(--ro-danger); }
-  .remoteOps__notice--success { background: var(--dsw-alias-state-success-secondary, #edf9f2); color: var(--ro-success); }
-  .remoteOps__settingsSection { display: flex; flex-direction: column; gap: 9px; }
-  .remoteOps__sectionTitle { color: var(--ro-muted); font-size: 12px; font-weight: 600; }
-  .remoteOps__hostCard { background: var(--ro-panel); border: 1px solid var(--ro-line); border-radius: 8px; padding: 15px; position: relative; }
-  .remoteOps__hostCard[data-current='true']::before { background: var(--ro-accent); border-radius: 2px; bottom: 14px; content: ''; left: -1px; position: absolute; top: 14px; width: 3px; }
-  .remoteOps__hostCardHead strong { display: block; font-size: 13px; }
-  .remoteOps__hostCardHead span { color: var(--ro-muted); display: block; font: 11px ui-monospace, Consolas, monospace; margin-top: 3px; }
-  .remoteOps__status { border-radius: 999px; font-size: 11px !important; margin: 0 !important; padding: 3px 8px; }
-  .remoteOps__status--online { background: var(--dsw-alias-state-success-secondary, #edf9f2); color: var(--ro-success) !important; }
-  .remoteOps__status--auth_failed, .remoteOps__status--offline, .remoteOps__status--key_missing { background: var(--dsw-alias-state-error-secondary, #fff0ef); color: var(--ro-danger) !important; }
-  .remoteOps__status--connecting, .remoteOps__status--degraded { background: var(--dsw-alias-state-warn-secondary, #fff8e8); color: var(--dsw-alias-state-warn-primary, #a86b00) !important; }
-  .remoteOps__facts { border-bottom: 1px solid var(--ro-line); border-top: 1px solid var(--ro-line); display: grid; gap: 12px 18px; grid-template-columns: repeat(3, 1fr); margin: 13px 0; padding: 12px 0; }
-  .remoteOps__factWide { grid-column: span 2; }
-  .remoteOps__facts dt { color: var(--ro-dim); font-size: 10px; }
-  .remoteOps__facts dd { color: var(--ro-muted); font-size: 12px; margin: 3px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .remoteOps__hostError { color: var(--ro-danger); font-size: 12px; margin: 0 0 10px; }
-  .remoteOps__reauthForm { align-items: end; border-block: 1px solid var(--ro-line); display: grid; gap: 8px; grid-template-columns: minmax(180px, 1fr) auto auto; margin: 10px 0; padding: 10px 0; }
-  .remoteOps__reauthForm input { color: var(--ro-text); font: inherit; font-size: 12px; min-width: 0; width: 100%; }
-  .remoteOps__hostActions { justify-content: flex-start; }
-  .remoteOps__hostActions button:hover, .remoteOps__iconButton:hover, .remoteOps__cancel:hover { background: var(--ro-panel-2); color: var(--ro-text); }
-  .remoteOps__jobList { display: flex; flex-direction: column; gap: 7px; list-style: none; margin: 0; padding: 0; }
-  .remoteOps__job { background: var(--ro-panel); border: 1px solid var(--ro-line); border-radius: 7px; overflow: hidden; }
-  .remoteOps__jobRow { align-items: center; background: transparent; border: 0; color: var(--ro-muted); cursor: pointer; display: flex; font: inherit; font-size: 12px; justify-content: space-between; padding: 11px 12px; text-align: left; width: 100%; }
-  .remoteOps__jobRow > span:first-child { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-  .remoteOps__jobRow strong, .remoteOps__jobRow small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .remoteOps__jobRow strong { color: var(--ro-text); font-size: 12px; }
-  .remoteOps__jobRow small { color: var(--ro-dim); font: 10px ui-monospace, Consolas, monospace; }
-  .remoteOps__jobStatus { border-radius: 999px; flex: none; font-size: 10px; margin-left: 12px; padding: 3px 7px; }
-  .remoteOps__jobStatus--running { background: var(--dsw-alias-state-business-tertiary, var(--ro-panel-2)); color: var(--ro-accent); }
-  .remoteOps__jobStatus--succeeded { color: var(--ro-success); }
-  .remoteOps__jobStatus--failed, .remoteOps__jobStatus--timed_out { color: var(--ro-danger); }
-  .remoteOps__jobDetail { border-top: 1px solid var(--ro-line); padding: 10px 12px 12px; }
-  .remoteOps__jobDetail dl { display: flex; gap: 24px; margin: 0 0 9px; }
-  .remoteOps__jobDetail dt { color: var(--ro-dim); font-size: 10px; }
-  .remoteOps__jobDetail dd { color: var(--ro-muted); font-size: 11px; margin: 2px 0 0; }
-  .remoteOps__jobLog { background: #111; border: 1px solid var(--ro-line); color: #ccc; font: 11px/1.5 ui-monospace, Consolas, monospace; margin: 0; max-height: 180px; overflow: auto; padding: 10px; white-space: pre-wrap; }
-  .remoteOps__cancel { color: var(--ro-danger); margin: 0 12px 10px; }
-  .remoteOps__danger { background: transparent; border: 1px solid transparent; color: var(--ro-danger); cursor: pointer; font-size: 12px; min-height: 30px; padding: 0 8px; }
-  .remoteOps__danger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-danger, rgba(213, 73, 65, .08)); }
-  .remoteOps__empty { align-items: center; border: 1px dashed var(--ro-line); color: var(--ro-muted); display: flex; justify-content: center; min-height: 74px; padding: 14px; }
-  @media (max-width: 620px) { .remoteOps__overview { grid-template-columns: 1fr; } .remoteOps__overview div + div { border-left: 0; border-top: 1px solid var(--ro-line); } .remoteOps__connectForm, .remoteOps__reauthForm { grid-template-columns: 1fr; } .remoteOps__wideInput { grid-column: auto; } .remoteOps__facts { grid-template-columns: 1fr 1fr; } .remoteOps__factWide { grid-column: 1 / -1; } }
+  .remoteSshOps { display: flex; flex-direction: column; gap: 20px; max-width: 920px; padding: 4px 0 30px; }
+  .remoteSshOps__settingsHead, .remoteSshOps__hostCardHead, .remoteSshOps__hostActions, .remoteSshOps__sectionTitle { align-items: center; display: flex; justify-content: space-between; gap: 12px; }
+  .remoteSshOps__settingsHead h2 { font-size: 18px; margin: 0; }
+  .remoteSshOps__settingsHead p { color: var(--ro-muted); font-size: 12px; margin: 4px 0 0; }
+  .remoteSshOps__overview { border-bottom: 1px solid var(--ro-line); border-top: 1px solid var(--ro-line); display: grid; grid-template-columns: repeat(3, 1fr); }
+  .remoteSshOps__overview div { display: flex; flex-direction: column; gap: 5px; padding: 13px 16px; }
+  .remoteSshOps__overview div + div { border-left: 1px solid var(--ro-line); }
+  .remoteSshOps__overview span { color: var(--ro-dim); font-size: 11px; }
+  .remoteSshOps__overview strong { font-size: 13px; font-weight: 600; }
+  .remoteSshOps__iconButton, .remoteSshOps__modeSwitch button, .remoteSshOps__hostActions button, .remoteSshOps__cancel { cursor: pointer; font-size: 12px; min-height: 30px; }
+  .remoteSshOps__modeSwitch { background: var(--ro-panel); border: 1px solid var(--ro-line); border-radius: 7px; display: inline-flex; padding: 2px; width: max-content; }
+  .remoteSshOps__modeSwitch button[data-active='true'] { background: var(--ro-panel-2); color: var(--ro-text); }
+  .remoteSshOps__connectForm { background: var(--ro-panel); border: 1px solid var(--ro-line); border-radius: 8px; display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 16px; }
+  .remoteSshOps__field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .remoteSshOps__field > span { color: var(--ro-muted); font-size: 11px; }
+  .remoteSshOps__field > span:not(:first-child), .remoteSshOps__field input { min-width: 0; width: 100%; }
+  .remoteSshOps__endpoint { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) 92px; }
+  .remoteSshOps__connectForm input, .remoteSshOps__sectionTitle select { color: var(--ro-text); font: inherit; font-size: 12px; }
+  .remoteSshOps__sectionTitle select { background: var(--ro-bg); border: 1px solid var(--ro-line); border-radius: 6px; height: 30px; padding: 0 9px; }
+  .remoteSshOps__formFooter { align-items: center; border-top: 1px solid var(--ro-line); color: var(--ro-dim); display: flex; font-size: 11px; justify-content: space-between; padding-top: 12px; }
+  .remoteSshOps__wideInput { grid-column: 1 / -1; }
+  .remoteSshOps__primary { cursor: pointer; font-size: 12px; font-weight: 600; min-width: 92px; }
+  .remoteSshOps__primary:disabled { cursor: default; opacity: .45; }
+  .remoteSshOps__notice { border-radius: 6px; font-size: 12px; padding: 9px 12px; }
+  .remoteSshOps__notice--error { background: var(--dsw-alias-state-error-secondary, #fff0ef); color: var(--ro-danger); }
+  .remoteSshOps__notice--success { background: var(--dsw-alias-state-success-secondary, #edf9f2); color: var(--ro-success); }
+  .remoteSshOps__settingsSection { display: flex; flex-direction: column; gap: 9px; }
+  .remoteSshOps__sectionTitle { color: var(--ro-muted); font-size: 12px; font-weight: 600; }
+  .remoteSshOps__hostCard { background: var(--ro-panel); border: 1px solid var(--ro-line); border-radius: 8px; padding: 15px; position: relative; }
+  .remoteSshOps__hostCard[data-current='true']::before { background: var(--ro-accent); border-radius: 2px; bottom: 14px; content: ''; left: -1px; position: absolute; top: 14px; width: 3px; }
+  .remoteSshOps__hostCardHead strong { display: block; font-size: 13px; }
+  .remoteSshOps__hostCardHead span { color: var(--ro-muted); display: block; font: 11px ui-monospace, Consolas, monospace; margin-top: 3px; }
+  .remoteSshOps__status { border-radius: 999px; font-size: 11px !important; margin: 0 !important; padding: 3px 8px; }
+  .remoteSshOps__status--online { background: var(--dsw-alias-state-success-secondary, #edf9f2); color: var(--ro-success) !important; }
+  .remoteSshOps__status--auth_failed, .remoteSshOps__status--offline, .remoteSshOps__status--key_missing { background: var(--dsw-alias-state-error-secondary, #fff0ef); color: var(--ro-danger) !important; }
+  .remoteSshOps__status--connecting, .remoteSshOps__status--degraded { background: var(--dsw-alias-state-warn-secondary, #fff8e8); color: var(--dsw-alias-state-warn-primary, #a86b00) !important; }
+  .remoteSshOps__facts { border-bottom: 1px solid var(--ro-line); border-top: 1px solid var(--ro-line); display: grid; gap: 12px 18px; grid-template-columns: repeat(3, 1fr); margin: 13px 0; padding: 12px 0; }
+  .remoteSshOps__factWide { grid-column: span 2; }
+  .remoteSshOps__facts dt { color: var(--ro-dim); font-size: 10px; }
+  .remoteSshOps__facts dd { color: var(--ro-muted); font-size: 12px; margin: 3px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .remoteSshOps__hostError { color: var(--ro-danger); font-size: 12px; margin: 0 0 10px; }
+  .remoteSshOps__reauthForm { align-items: end; border-block: 1px solid var(--ro-line); display: grid; gap: 8px; grid-template-columns: minmax(180px, 1fr) auto auto; margin: 10px 0; padding: 10px 0; }
+  .remoteSshOps__reauthForm input { color: var(--ro-text); font: inherit; font-size: 12px; min-width: 0; width: 100%; }
+  .remoteSshOps__hostActions { justify-content: flex-start; }
+  .remoteSshOps__hostActions button:hover, .remoteSshOps__iconButton:hover, .remoteSshOps__cancel:hover { background: var(--ro-panel-2); color: var(--ro-text); }
+  .remoteSshOps__jobList { display: flex; flex-direction: column; gap: 7px; list-style: none; margin: 0; padding: 0; }
+  .remoteSshOps__job { background: var(--ro-panel); border: 1px solid var(--ro-line); border-radius: 7px; overflow: hidden; }
+  .remoteSshOps__jobRow { align-items: center; background: transparent; border: 0; color: var(--ro-muted); cursor: pointer; display: flex; font: inherit; font-size: 12px; justify-content: space-between; padding: 11px 12px; text-align: left; width: 100%; }
+  .remoteSshOps__jobRow > span:first-child { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .remoteSshOps__jobRow strong, .remoteSshOps__jobRow small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .remoteSshOps__jobRow strong { color: var(--ro-text); font-size: 12px; }
+  .remoteSshOps__jobRow small { color: var(--ro-dim); font: 10px ui-monospace, Consolas, monospace; }
+  .remoteSshOps__jobStatus { border-radius: 999px; flex: none; font-size: 10px; margin-left: 12px; padding: 3px 7px; }
+  .remoteSshOps__jobStatus--running { background: var(--dsw-alias-state-business-tertiary, var(--ro-panel-2)); color: var(--ro-accent); }
+  .remoteSshOps__jobStatus--succeeded { color: var(--ro-success); }
+  .remoteSshOps__jobStatus--failed, .remoteSshOps__jobStatus--timed_out { color: var(--ro-danger); }
+  .remoteSshOps__jobDetail { border-top: 1px solid var(--ro-line); padding: 10px 12px 12px; }
+  .remoteSshOps__jobDetail dl { display: flex; gap: 24px; margin: 0 0 9px; }
+  .remoteSshOps__jobDetail dt { color: var(--ro-dim); font-size: 10px; }
+  .remoteSshOps__jobDetail dd { color: var(--ro-muted); font-size: 11px; margin: 2px 0 0; }
+  .remoteSshOps__jobLog { background: #111; border: 1px solid var(--ro-line); color: #ccc; font: 11px/1.5 ui-monospace, Consolas, monospace; margin: 0; max-height: 180px; overflow: auto; padding: 10px; white-space: pre-wrap; }
+  .remoteSshOps__cancel { color: var(--ro-danger); margin: 0 12px 10px; }
+  .remoteSshOps__danger { background: transparent; border: 1px solid transparent; color: var(--ro-danger); cursor: pointer; font-size: 12px; min-height: 30px; padding: 0 8px; }
+  .remoteSshOps__danger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-danger, rgba(213, 73, 65, .08)); }
+  .remoteSshOps__empty { align-items: center; border: 1px dashed var(--ro-line); color: var(--ro-muted); display: flex; justify-content: center; min-height: 74px; padding: 14px; }
+  @media (max-width: 620px) { .remoteSshOps__overview { grid-template-columns: 1fr; } .remoteSshOps__overview div + div { border-left: 0; border-top: 1px solid var(--ro-line); } .remoteSshOps__connectForm, .remoteSshOps__reauthForm { grid-template-columns: 1fr; } .remoteSshOps__wideInput { grid-column: auto; } .remoteSshOps__facts { grid-template-columns: 1fr 1fr; } .remoteSshOps__factWide { grid-column: 1 / -1; } }
 `

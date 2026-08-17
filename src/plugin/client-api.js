@@ -1,10 +1,10 @@
-const PREFIX = '/remote-ops/v1'
+const PREFIX = '/remote-ssh-ops/v1'
 
 async function parse(response) {
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
     const error = new Error(body.error ?? `http ${response.status}`)
-    Object.assign(error, body, { code: body.code ?? 'REMOTE_OPS_ERROR' })
+    Object.assign(error, body, { code: body.code ?? 'REMOTE_SSH_OPS_ERROR' })
     throw error
   }
   return body
@@ -181,7 +181,7 @@ export function createSettingsClient(fetchImpl = fetch, xhrFactory = () => new X
             return
           }
           const error = new Error(body.error ?? `http ${request.status}`)
-          Object.assign(error, body, { code: body.code ?? 'REMOTE_OPS_ERROR' })
+          Object.assign(error, body, { code: body.code ?? 'REMOTE_SSH_OPS_ERROR' })
           cleanup()
           reject(error)
         }

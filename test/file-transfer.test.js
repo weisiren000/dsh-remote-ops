@@ -61,7 +61,7 @@ test('Host API 以流方式转发二进制上传和下载', async () => {
   })
 
   const uploadResponse = new MemoryResponse()
-  await handler(request('/remote-ops/v1/hosts/h%2F1/transfer?path=%2Fsrv%2Farchive.bin', 'PUT', source), uploadResponse)
+  await handler(request('/remote-ssh-ops/v1/hosts/h%2F1/transfer?path=%2Fsrv%2Farchive.bin', 'PUT', source), uploadResponse)
   assert.equal(uploadResponse.statusCode, 200)
   assert.equal(uploaded.hostId, 'h/1')
   assert.equal(uploaded.remotePath, '/srv/archive.bin')
@@ -69,7 +69,7 @@ test('Host API 以流方式转发二进制上传和下载', async () => {
   assert.deepEqual(uploaded.bytes, source)
 
   const downloadResponse = new MemoryResponse()
-  await handler(request('/remote-ops/v1/hosts/h%2F1/transfer?path=%2Fsrv%2Farchive.bin', 'GET'), downloadResponse)
+  await handler(request('/remote-ssh-ops/v1/hosts/h%2F1/transfer?path=%2Fsrv%2Farchive.bin', 'GET'), downloadResponse)
   assert.equal(downloadResponse.statusCode, 200)
   assert.equal(downloadResponse.headers['content-length'], source.length)
   assert.match(downloadResponse.headers['content-disposition'], /archive\.bin/)
@@ -87,7 +87,7 @@ test('Host API 不因文件声明大小超过 1 GiB 而拒绝上传', async () =
       },
     },
   })
-  const req = request('/remote-ops/v1/hosts/h1/transfer?path=%2Fsrv%2Flarge.bin', 'PUT')
+  const req = request('/remote-ssh-ops/v1/hosts/h1/transfer?path=%2Fsrv%2Flarge.bin', 'PUT')
   req.headers['content-length'] = String(declaredSize)
   const res = new MemoryResponse()
 

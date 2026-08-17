@@ -119,16 +119,16 @@ test('工作台 API 使用固定文件、终端和审阅路由', async () => {
   }
   const handle = createHostApiHandler({ runner })
   const files = mockRes()
-  await handle(mockReq({ method: 'GET', url: '/remote-ops/v1/hosts/h1/files?path=%2Fsrv' }), files)
+  await handle(mockReq({ method: 'GET', url: '/remote-ssh-ops/v1/hosts/h1/files?path=%2Fsrv' }), files)
   assert.equal(files.statusCode, 200)
   const write = mockRes()
-  await handle(mockReq({ method: 'PUT', url: '/remote-ops/v1/hosts/h1/file', body: { path: '/srv/a', content: 'y', expected_version: 'v1', source: 'ai' } }), write)
+  await handle(mockReq({ method: 'PUT', url: '/remote-ssh-ops/v1/hosts/h1/file', body: { path: '/srv/a', content: 'y', expected_version: 'v1', source: 'ai' } }), write)
   assert.equal(calls.at(-1)[1].expectedVersion, 'v1')
   const terminal = mockRes()
-  await handle(mockReq({ method: 'POST', url: '/remote-ops/v1/hosts/h1/terminal', body: { command: 'pwd' } }), terminal)
+  await handle(mockReq({ method: 'POST', url: '/remote-ssh-ops/v1/hosts/h1/terminal', body: { command: 'pwd' } }), terminal)
   assert.equal(terminal.body.log, 'ok')
   const review = mockRes()
-  await handle(mockReq({ method: 'POST', url: '/remote-ops/v1/changes/c1/revert' }), review)
+  await handle(mockReq({ method: 'POST', url: '/remote-ssh-ops/v1/changes/c1/revert' }), review)
   assert.deepEqual(calls.at(-1), ['review', 'c1', 'revert'])
 })
 
@@ -295,7 +295,7 @@ test('hostd 和 Host API 在 JSON 请求体超限时立即返回 413', async () 
     const response = mockRes()
     await handle(rawMockReq({
       method: 'PUT',
-      url: '/remote-ops/v1/hosts/h1/file',
+      url: '/remote-ssh-ops/v1/hosts/h1/file',
       body: JSON.stringify({ path: '/srv/a', content: 'x'.repeat(128) }),
     }), response)
     assert.equal(response.statusCode, 413)

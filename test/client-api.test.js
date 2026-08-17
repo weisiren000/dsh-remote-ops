@@ -40,12 +40,12 @@ test('运维 API 使用统一路径并传递任务筛选与日志尾部参数', 
   await client.jobs('host/1', { status: 'running', from: '' })
   await client.cancel('job/1')
   await client.log('job/1', 32)
-  assert.equal(calls[0].url, '/remote-ops/v1/hosts/host%2F1/reconnect')
-  assert.equal(calls[1].url, '/remote-ops/v1/hosts/host%2F1/diagnose')
-  assert.equal(calls[2].url, '/remote-ops/v1/hosts/host%2F1/health')
-  assert.equal(calls[3].url, '/remote-ops/v1/hosts/host%2F1/jobs?status=running')
+  assert.equal(calls[0].url, '/remote-ssh-ops/v1/hosts/host%2F1/reconnect')
+  assert.equal(calls[1].url, '/remote-ssh-ops/v1/hosts/host%2F1/diagnose')
+  assert.equal(calls[2].url, '/remote-ssh-ops/v1/hosts/host%2F1/health')
+  assert.equal(calls[3].url, '/remote-ssh-ops/v1/hosts/host%2F1/jobs?status=running')
   assert.equal(calls[4].options.method, 'POST')
-  assert.equal(calls[5].url, '/remote-ops/v1/jobs/job%2F1/log?tail=32')
+  assert.equal(calls[5].url, '/remote-ssh-ops/v1/jobs/job%2F1/log?tail=32')
 })
 
 test('SSH password_session 重认证只临时提交密码和可选指纹', async () => {
@@ -57,7 +57,7 @@ test('SSH password_session 重认证只临时提交密码和可选指纹', async
 
   await client.reconnect('host/1', { hostFingerprint: 'SHA256:new', password: 'memory-only-password' })
 
-  assert.equal(request.url, '/remote-ops/v1/hosts/host%2F1/reconnect')
+  assert.equal(request.url, '/remote-ssh-ops/v1/hosts/host%2F1/reconnect')
   assert.equal(request.options.method, 'POST')
   assert.deepEqual(JSON.parse(request.options.body), {
     host_fingerprint: 'SHA256:new',
@@ -70,6 +70,15 @@ test('API 错误保留服务端错误码和附加字段', async () => {
   await assert.rejects(client.health('h1'), (error) => {
     assert.equal(error.code, 'HOST_KEY_CHANGED')
     assert.equal(error.fingerprint, 'abc')
+    return true
+  })
+})
+
+test('客户端默认错误码与 Host API 保持一致', async () => {
+  const client = createSettingsClient(async () => response({ error: 'temporary failure' }, false))
+
+  await assert.rejects(client.health('h1'), (error) => {
+    assert.equal(error.code, 'REMOTE_SSH_OPS_ERROR')
     return true
   })
 })
@@ -88,7 +97,7 @@ test('SSH 直连 JSON 完整保留包含多个 # 的用户名', async () => {
     password: 'memory-only-password',
   })
 
-  assert.equal(request.url, '/remote-ops/v1/hosts/ssh')
+  assert.equal(request.url, '/remote-ssh-ops/v1/hosts/ssh')
   assert.equal(JSON.parse(request.options.body).username, 'tenant#user#remote')
 })
 
@@ -104,14 +113,14 @@ test('工作区 API 使用编码路径和 snake_case 请求字段', async () => 
   await client.terminal('h/1', { command: 'pwd', timeoutMs: 1000 })
   await client.changes('h/1', { status: 'pending' })
   await client.reviewChange('c/1', 'accept')
-  assert.equal(calls[0].url, '/remote-ops/v1/hosts/h%2F1/files?path=%2Fsrv%2Fapp')
-  assert.equal(calls[1].url, '/remote-ops/v1/hosts/h%2F1/file?path=%2Fsrv%2Fapp%2Fmain.js')
+  assert.equal(calls[0].url, '/remote-ssh-ops/v1/hosts/h%2F1/files?path=%2Fsrv%2Fapp')
+  assert.equal(calls[1].url, '/remote-ssh-ops/v1/hosts/h%2F1/file?path=%2Fsrv%2Fapp%2Fmain.js')
   const writeBody = JSON.parse(calls[2].options.body)
   assert.equal(writeBody.before_content, 'old')
   assert.equal(writeBody.expected_version, 'sha256:x')
   assert.equal(JSON.parse(calls[3].options.body).timeout_ms, 1000)
-  assert.equal(calls[4].url, '/remote-ops/v1/hosts/h%2F1/changes?status=pending')
-  assert.equal(calls[5].url, '/remote-ops/v1/changes/c%2F1/accept')
+  assert.equal(calls[4].url, '/remote-ssh-ops/v1/hosts/h%2F1/changes?status=pending')
+  assert.equal(calls[5].url, '/remote-ssh-ops/v1/changes/c%2F1/accept')
 })
 
 test('文件传输 API 使用二进制请求并上报上传进度', async () => {
@@ -136,11 +145,11 @@ test('文件传输 API 使用二进制请求并上报上传进度', async () => 
   const result = await client.uploadFile('h/1', '/srv/archive.bin', file, (value) => progress.push(value))
 
   assert.equal(requests[0].method, 'PUT')
-  assert.equal(requests[0].url, '/remote-ops/v1/hosts/h%2F1/transfer?path=%2Fsrv%2Farchive.bin')
+  assert.equal(requests[0].url, '/remote-ssh-ops/v1/hosts/h%2F1/transfer?path=%2Fsrv%2Farchive.bin')
   assert.equal(requests[0].body, file)
   assert.deepEqual(progress, [{ loaded: 3, total: 4, percent: 75 }])
   assert.equal(result.size, 4)
-  assert.equal(client.downloadUrl('h/1', '/srv/archive.bin'), '/remote-ops/v1/hosts/h%2F1/transfer?path=%2Fsrv%2Farchive.bin')
+  assert.equal(client.downloadUrl('h/1', '/srv/archive.bin'), '/remote-ssh-ops/v1/hosts/h%2F1/transfer?path=%2Fsrv%2Farchive.bin')
 })
 
 test('上传开始前已取消时立即返回取消错误', async () => {

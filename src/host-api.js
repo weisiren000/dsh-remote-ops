@@ -1,4 +1,4 @@
-const PREFIX = '/remote-ops/v1'
+const PREFIX = '/remote-ssh-ops/v1'
 import { DEFAULT_MAX_REQUEST_BODY_BYTES, readJsonBody } from './http-json.js'
 import { pipeline } from 'node:stream/promises'
 import {
@@ -174,7 +174,7 @@ export function createHostApiHandler({
       json(res, 403, { error: 'loopback only', code: 'LOOPBACK_ONLY' })
       return
     }
-    const url = new URL(req.url ?? '/', 'http://remote-ops.local')
+    const url = new URL(req.url ?? '/', 'http://remote-ssh-ops.local')
     const pathname = url.pathname.startsWith(PREFIX)
       ? url.pathname.slice(PREFIX.length) || '/'
       : url.pathname
@@ -385,7 +385,7 @@ export function createHostApiHandler({
         res.destroy(error)
         return
       }
-      const code = error?.code ?? 'REMOTE_OPS_ERROR'
+      const code = error?.code ?? 'REMOTE_SSH_OPS_ERROR'
       const status = error?.status ?? (code === 'HOST_NOT_FOUND' || code === 'JOB_NOT_FOUND' || code === 'CHANGE_NOT_FOUND'
         ? 404
         : code === 'JOB_FORBIDDEN' || code === 'CHANGE_FORBIDDEN'

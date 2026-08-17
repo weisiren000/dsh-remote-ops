@@ -168,12 +168,12 @@ test('host API 暴露重连、诊断、健康、任务取消和日志尾部接�
     method, url, socket: { remoteAddress: '127.0.0.1' }, async *[Symbol.asyncIterator]() {},
   })
   const response = () => ({ writeHead(status) { this.status = status }, end(body) { this.body = body ? JSON.parse(body) : null } })
-  let res = response(); await handler(request('/remote-ops/v1/hosts/host-a/reconnect', 'POST'), res); assert.equal(res.body.status, 'online')
-  res = response(); await handler(request('/remote-ops/v1/hosts/host-a/diagnose', 'POST'), res); assert.equal(res.body.ok, true)
-  res = response(); await handler(request('/remote-ops/v1/hosts/host-a/health'), res); assert.equal(res.body.status, 'online')
-  res = response(); await handler(request('/remote-ops/v1/hosts/host-a/jobs?status=failed'), res); assert.equal(res.body.jobs.length, 1)
-  res = response(); await handler(request('/remote-ops/v1/jobs/j1/cancel', 'POST'), res); assert.equal(res.body.status, 'cancel_requested')
-  res = response(); await handler(request('/remote-ops/v1/jobs/j1/log?tail=12'), res); assert.equal(res.body.log, 'tail')
+  let res = response(); await handler(request('/remote-ssh-ops/v1/hosts/host-a/reconnect', 'POST'), res); assert.equal(res.body.status, 'online')
+  res = response(); await handler(request('/remote-ssh-ops/v1/hosts/host-a/diagnose', 'POST'), res); assert.equal(res.body.ok, true)
+  res = response(); await handler(request('/remote-ssh-ops/v1/hosts/host-a/health'), res); assert.equal(res.body.status, 'online')
+  res = response(); await handler(request('/remote-ssh-ops/v1/hosts/host-a/jobs?status=failed'), res); assert.equal(res.body.jobs.length, 1)
+  res = response(); await handler(request('/remote-ssh-ops/v1/jobs/j1/cancel', 'POST'), res); assert.equal(res.body.status, 'cancel_requested')
+  res = response(); await handler(request('/remote-ssh-ops/v1/jobs/j1/log?tail=12'), res); assert.equal(res.body.log, 'tail')
   assert.deepEqual(calls.map((call) => call[0]), ['reconnect', 'diagnose', 'health', 'jobs', 'cancel', 'log'])
 })
 

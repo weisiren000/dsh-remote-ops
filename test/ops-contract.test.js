@@ -72,7 +72,7 @@ test('任务 API 统一返回错误字段并把主机任务筛选参数传给 ru
   const handle = createHostApiHandler({ runner })
 
   const jobs = response()
-  await handle(request('/remote-ops/v1/hosts/host-1/jobs?status=failed&since=100&until=200'), jobs)
+  await handle(request('/remote-ssh-ops/v1/hosts/host-1/jobs?status=failed&since=100&until=200'), jobs)
   assert.equal(jobs.status, 200)
   assert.equal(filter.hostId, 'host-1')
   assert.equal(filter.status, 'failed')
@@ -85,14 +85,14 @@ test('任务 API 统一返回错误字段并把主机任务筛选参数传给 ru
   assert.equal(jobs.body.jobs[0].error_message, 'remote command failed')
 
   const detail = response()
-  await handle(request('/remote-ops/v1/jobs/job-1'), detail)
+  await handle(request('/remote-ssh-ops/v1/jobs/job-1'), detail)
   assert.equal(detail.status, 200)
   assert.equal(detail.body.error_code, 'SSH_EXEC_FAILED')
   assert.equal(detail.body.error_message, 'remote command failed')
   assert.equal(detail.body.log, 'full log')
 
   const tail = response()
-  await handle(request('/remote-ops/v1/jobs/job-1/log?tail=12'), tail)
+  await handle(request('/remote-ssh-ops/v1/jobs/job-1/log?tail=12'), tail)
   assert.equal(tail.status, 200)
   assert.equal(tail.body.log, 'tail log')
 })
@@ -110,7 +110,7 @@ test('指纹变更错误通过可识别错误码和指纹返回', async () => {
     },
   })
   const res = response()
-  await handle(request('/remote-ops/v1/hosts/host-1/reconnect', 'POST'), res)
+  await handle(request('/remote-ssh-ops/v1/hosts/host-1/reconnect', 'POST'), res)
   assert.equal(res.status, 409)
   assert.equal(res.body.code, 'HOST_KEY_CHANGED')
   assert.equal(res.body.fingerprint, 'SHA256:new-fingerprint')

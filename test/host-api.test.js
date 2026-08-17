@@ -60,7 +60,7 @@ test('回环可配对，列表不含 token，非回环拒绝', async () => {
     const pairRes = mockRes()
     await handle(mockReq({
       method: 'POST',
-      url: '/remote-ops/v1/hosts/pair',
+      url: '/remote-ssh-ops/v1/hosts/pair',
       body: { address: hostd.url, pairing_code: hostd.pairingCode, display_name: 'alpha' },
     }), pairRes)
     assert.equal(pairRes.statusCode, 200)
@@ -68,7 +68,7 @@ test('回环可配对，列表不含 token，非回环拒绝', async () => {
     assert.equal(pairRes.body.device_token, undefined)
 
     const listRes = mockRes()
-    await handle(mockReq({ method: 'GET', url: '/remote-ops/v1/hosts' }), listRes)
+    await handle(mockReq({ method: 'GET', url: '/remote-ssh-ops/v1/hosts' }), listRes)
     assert.equal(listRes.statusCode, 200)
     assert.equal(listRes.body.hosts[0].host_id, pairRes.body.host_id)
     assert.equal(listRes.body.hosts[0].device_token, undefined)
@@ -76,7 +76,7 @@ test('回环可配对，列表不含 token，非回环拒绝', async () => {
     const denied = mockRes()
     await handle(mockReq({
       method: 'GET',
-      url: '/remote-ops/v1/hosts',
+      url: '/remote-ssh-ops/v1/hosts',
       address: '10.0.0.8',
     }), denied)
     assert.equal(denied.statusCode, 403)
@@ -85,13 +85,49 @@ test('回环可配对，列表不含 token，非回环拒绝', async () => {
   }
 })
 
+test('旧 API 路径不再命中插件接口', async () => {
+  let listCalled = false
+  const handle = createHostApiHandler({
+    runner: {
+      async list() {
+        listCalled = true
+        return []
+      },
+    },
+  })
+  const response = mockRes()
+  const legacyPath = `/${['remote', 'ops'].join('-')}/v1/hosts`
+
+  await handle(mockReq({ method: 'GET', url: legacyPath }), response)
+
+  assert.equal(response.statusCode, 404)
+  assert.equal(response.body.code, 'NOT_FOUND')
+  assert.equal(listCalled, false)
+})
+
+test('Host API 默认错误码使用统一项目标识', async () => {
+  const handle = createHostApiHandler({
+    runner: {
+      async list() {
+        throw new Error('temporary failure')
+      },
+    },
+  })
+  const response = mockRes()
+
+  await handle(mockReq({ method: 'GET', url: '/remote-ssh-ops/v1/hosts' }), response)
+
+  assert.equal(response.statusCode, 400)
+  assert.equal(response.body.code, 'REMOTE_SSH_OPS_ERROR')
+})
+
 test('可改显示名、切目标、删除本机记录', async () => {
   const { hostd, handle } = await boot()
   try {
     const paired = mockRes()
     await handle(mockReq({
       method: 'POST',
-      url: '/remote-ops/v1/hosts/pair',
+      url: '/remote-ssh-ops/v1/hosts/pair',
       body: { address: hostd.url, pairing_code: hostd.pairingCode },
     }), paired)
     const hostId = paired.body.host_id
@@ -99,7 +135,7 @@ test('可改显示名、切目标、删除本机记录', async () => {
     const updated = mockRes()
     await handle(mockReq({
       method: 'POST',
-      url: `/remote-ops/v1/hosts/${hostId}`,
+      url: `/remote-ssh-ops/v1/hosts/${hostId}`,
       body: { display_name: 'prod' },
     }), updated)
     assert.equal(updated.body.display_name, 'prod')
@@ -107,19 +143,19 @@ test('可改显示名、切目标、删除本机记录', async () => {
     const used = mockRes()
     await handle(mockReq({
       method: 'POST',
-      url: `/remote-ops/v1/hosts/${hostId}/use`,
+      url: `/remote-ssh-ops/v1/hosts/${hostId}/use`,
     }), used)
     assert.equal(used.body.current, true)
 
     const removed = mockRes()
     await handle(mockReq({
       method: 'DELETE',
-      url: `/remote-ops/v1/hosts/${hostId}`,
+      url: `/remote-ssh-ops/v1/hosts/${hostId}`,
     }), removed)
     assert.equal(removed.body.ok, true)
 
     const listed = mockRes()
-    await handle(mockReq({ method: 'GET', url: '/remote-ops/v1/hosts' }), listed)
+    await handle(mockReq({ method: 'GET', url: '/remote-ssh-ops/v1/hosts' }), listed)
     assert.equal(listed.body.hosts.length, 0)
   } finally {
     await hostd.close()
@@ -135,7 +171,7 @@ test('文件分页拒绝 NaN、小数和负数参数', async () => {
   })
   for (const query of ['limit=NaN', 'limit=1.5', 'limit=-1', 'offset=NaN', 'offset=1.5', 'offset=-1']) {
     const response = mockRes()
-    await handle(mockReq({ method: 'GET', url: `/remote-ops/v1/hosts/h1/files?${query}` }), response)
+    await handle(mockReq({ method: 'GET', url: `/remote-ssh-ops/v1/hosts/h1/files?${query}` }), response)
     assert.equal(response.statusCode, 400, query)
     assert.equal(response.body.code, 'PAGE_PARAMETER_INVALID', query)
   }
@@ -164,7 +200,7 @@ test('SSH 直连从 JSON 到控制器完整保留包含多个 # 的用户名', a
 
   await handle(mockReq({
     method: 'POST',
-    url: '/remote-ops/v1/hosts/ssh',
+    url: '/remote-ssh-ops/v1/hosts/ssh',
     body: {
       host: '127.0.0.1',
       port: 2222,
@@ -192,7 +228,7 @@ test('无法自动处理的 SSH 交互式认证返回 401 和专用错误码', a
 
   await handle(mockReq({
     method: 'POST',
-    url: '/remote-ops/v1/hosts/ssh',
+    url: '/remote-ssh-ops/v1/hosts/ssh',
     body: { host: '127.0.0.1', port: 22, username: 'user', password: 'secret' },
   }), response)
 
@@ -223,7 +259,7 @@ test('SSH 重认证透传临时密码并返回认证模式，不把密码回显�
 
   await handle(mockReq({
     method: 'POST',
-    url: '/remote-ops/v1/hosts/ssh-host/reconnect',
+    url: '/remote-ssh-ops/v1/hosts/ssh-host/reconnect',
     body: { host_fingerprint: 'SHA256:new', password: 'memory-only-password' },
   }), response)
 
@@ -250,7 +286,7 @@ test('SSH 会话丢失返回 401 和重新认证错误码', async () => {
 
   await handle(mockReq({
     method: 'POST',
-    url: '/remote-ops/v1/hosts/ssh-host/reconnect',
+    url: '/remote-ssh-ops/v1/hosts/ssh-host/reconnect',
     body: {},
   }), response)
 
