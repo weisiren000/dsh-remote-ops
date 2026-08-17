@@ -9,7 +9,7 @@ import { createHostClient } from '../src/controller/client.js'
 import { createRunner } from '../src/controller/runner.js'
 
 async function bootRunner() {
-  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'remote-ops-runner-'))
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'remote-ssh-ops-runner-'))
   const store = await createControllerStore(dataDir)
   const client = createHostClient({ allowInsecureLoopback: true })
   const runner = createRunner({ store, client })

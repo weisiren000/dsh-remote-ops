@@ -1,6 +1,6 @@
-# dsh-remote-ops
+# dsh-remote-ssh-ops
 
-`dsh-remote-ops` 是 DeepSeek Harness 的远程主机插件。它为 DSH 增加 SSH 直连、`remote-hostd` 配对、远程命令执行、远程文件读写、任务管理和远程工作台。
+`dsh-remote-ssh-ops` 是 DeepSeek Harness 的 SSH 远程运维插件。它为 DSH 增加 SSH 直连、`remote-hostd` 配对、远程命令执行、远程文件读写、任务管理和远程工作台。
 
 插件不会替代 DSH 的本地工具：检查当前本地工作区时，应使用 DSH 自带的本地工具；只有用户明确要求远程、服务器或指定主机操作时，才使用 `host_*` 工具。
 
@@ -12,7 +12,7 @@
 
 ## 界面预览
 
-![dsh-remote-ops 远程工作台界面预览](docs/assets/remote-workbench-preview.png)
+![dsh-remote-ssh-ops 远程工作台界面预览](docs/assets/remote-workbench-preview.png)
 
 ## 安装
 
@@ -21,15 +21,15 @@
 安装当前稳定版本：
 
 ```bash
-dsh plugin --profile web add github:weisiren000/dsh-remote-ops#v0.0.8
+dsh plugin --profile web add github:weisiren000/dsh-remote-ssh-ops#v0.0.9
 ```
 
-DSH 会自动把插件安装到 Web profile，并将 `dsh-remote-ops` 注册到 `dsh.profile.bundles`。不需要克隆仓库、手动安装依赖、构建客户端或修改 profile 的 `package.json`。
+DSH 会自动把插件安装到 Web profile，并将 `dsh-remote-ssh-ops` 注册到 `dsh.profile.bundles`。不需要克隆仓库、手动安装依赖、构建客户端或修改 profile 的 `package.json`。
 
 如果系统没有全局 `dsh` 命令，可以通过 `npx` 执行：
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add github:weisiren000/dsh-remote-ops#v0.0.8
+npx @deepseek-ai/dsh plugin --profile web add github:weisiren000/dsh-remote-ssh-ops#v0.0.9
 ```
 
 安装命令需要本机可以使用 [Git](https://git-scm.com/) 和 pnpm。使用 `npx` 时还需要 Node.js。
@@ -55,7 +55,7 @@ npx @deepseek-ai/dsh web
 发布新版本后，重新执行安装命令并替换 TAG：
 
 ```bash
-dsh plugin --profile web add github:weisiren000/dsh-remote-ops#vX.Y.Z
+dsh plugin --profile web add github:weisiren000/dsh-remote-ssh-ops#vX.Y.Z
 ```
 
 随后重启 DSH Web。
@@ -63,7 +63,13 @@ dsh plugin --profile web add github:weisiren000/dsh-remote-ops#vX.Y.Z
 ### 卸载
 
 ```bash
-dsh plugin --profile web remove dsh-remote-ops
+dsh plugin --profile web remove dsh-remote-ssh-ops
+```
+
+没有全局 `dsh` 命令时：
+
+```bash
+npx @deepseek-ai/dsh plugin --profile web remove dsh-remote-ssh-ops
 ```
 
 ### 连接远程机器
@@ -92,14 +98,14 @@ Invoke-WebRequest 'http://127.0.0.1:3080/remote-ops/v1/hosts' | Select-Object St
 
 ```bash
 cd /path/to/remote-project
-node /path/to/dsh-remote-ops/src/hostd/cli.js --listen 127.0.0.1:7680
+node /path/to/dsh-remote-ssh-ops/src/hostd/cli.js --listen 127.0.0.1:7680
 ```
 
 直接对局域网或公网提供服务时必须使用 TLS：
 
 ```bash
 cd /path/to/remote-project
-node /path/to/dsh-remote-ops/src/hostd/cli.js \
+node /path/to/dsh-remote-ssh-ops/src/hostd/cli.js \
   --listen 0.0.0.0:7680 \
   --tls-cert /path/to/fullchain.pem \
   --tls-key /path/to/privkey.pem
@@ -108,7 +114,7 @@ node /path/to/dsh-remote-ops/src/hostd/cli.js \
 只有在临时隔离网络中，才使用不安全的明文监听：
 
 ```bash
-node /path/to/dsh-remote-ops/src/hostd/cli.js --listen 0.0.0.0:7680 --allow-insecure
+node /path/to/dsh-remote-ssh-ops/src/hostd/cli.js --listen 0.0.0.0:7680 --allow-insecure
 ```
 
 终端会打印监听地址和配对码。不要把配对码提交到代码仓库或写入公开日志。

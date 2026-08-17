@@ -1,13 +1,33 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { promisify } from 'node:util'
 import { createHostState } from '../src/hostd/state.js'
+
+const execFileAsync = promisify(execFile)
 
 async function tempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'hostd-state-'))
 }
+
+test('hostd 默认数据写入新项目目录', async () => {
+  const fakeHome = await tempDir()
+  const stateUrl = new URL('../src/hostd/state.js', import.meta.url).href
+  const script = `import { createHostState } from ${JSON.stringify(stateUrl)}; await createHostState()`
+
+  await execFileAsync(process.execPath, ['--input-type=module', '--eval', script], {
+    env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome },
+  })
+
+  await fs.access(path.join(fakeHome, '.dsh', 'remote-ssh-ops', 'hostd', 'host.json'))
+  await assert.rejects(
+    fs.access(path.join(fakeHome, '.dsh', 'remote-ops', 'hostd', 'host.json')),
+    { code: 'ENOENT' },
+  )
+})
 
 test('首次启动生成稳定 host_id，重启保持不变', async () => {
   const dataDir = await tempDir()

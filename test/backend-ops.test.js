@@ -8,7 +8,7 @@ import { createRunner } from '../src/controller/runner.js'
 import { createHostApiHandler } from '../src/host-api.js'
 
 async function tempDir() {
-  return fs.mkdtemp(path.join(os.tmpdir(), 'remote-ops-backend-'))
+  return fs.mkdtemp(path.join(os.tmpdir(), 'remote-ssh-ops-backend-'))
 }
 
 function deferred() {

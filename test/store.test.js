@@ -23,7 +23,7 @@ function hostFixture(overrides = {}) {
 }
 
 async function tempDir() {
-  return fs.mkdtemp(path.join(os.tmpdir(), 'remote-ops-store-'))
+  return fs.mkdtemp(path.join(os.tmpdir(), 'remote-ssh-ops-store-'))
 }
 
 function recoverableWriter(shouldFail) {

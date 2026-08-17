@@ -7,7 +7,7 @@ import { createControllerStore } from '../src/controller/store.js'
 import { resolveTarget } from '../src/controller/resolve.js'
 
 async function storeWith(hosts, currentHostId = null) {
-  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'remote-ops-resolve-'))
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'remote-ssh-ops-resolve-'))
   const store = await createControllerStore(dataDir)
   for (const host of hosts) await store.upsertHost(host)
   if (currentHostId) await store.setCurrentHost(currentHostId)

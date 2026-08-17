@@ -319,7 +319,7 @@ export function createSshClient({ keysDir, sftpLockStaleMs, openConnection: open
           assertActive()
           const remote = await inspectRemote(opened.connection)
           assertActive()
-          const keys = utils.generateKeyPairSync('ed25519', { comment: `dsh-remote-ops-${hostId}` })
+          const keys = utils.generateKeyPairSync('ed25519', { comment: `dsh-remote-ssh-ops-${hostId}` })
           await mkdir(keysDir, { recursive: true })
           assertActive()
           await writeFile(privateKeyPath, keys.private, { encoding: 'utf8', mode: 0o600 })

@@ -39,7 +39,7 @@ test('心跳 disposer 先停止调度并等待正在执行的刷新停稳', asyn
 })
 
 test('apply 在 Web 路由注册失败时清理已创建的心跳定时器', async () => {
-  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'remote-ops-apply-'))
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'remote-ssh-ops-apply-'))
   const originalSetInterval = globalThis.setInterval
   const originalClearInterval = globalThis.clearInterval
   const timer = { id: 'test-timer' }

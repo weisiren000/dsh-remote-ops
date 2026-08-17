@@ -16,7 +16,7 @@ test('exports a Cordis-compatible config schema', () => {
   const result = validate({})
   assert.equal(result.issues, undefined)
   assert.deepEqual(result.value, {
-    dataDir: path.join(os.homedir(), '.dsh', 'remote-ops'),
+    dataDir: path.join(os.homedir(), '.dsh', 'remote-ssh-ops'),
     heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
     maxRequestBodyBytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
     maxResponseBodyBytes: DEFAULT_MAX_REQUEST_BODY_BYTES,

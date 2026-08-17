@@ -1,3 +1,3 @@
 - insert:
-    - id: remote-ops
-      name: dsh-remote-ops
+    - id: remote-ssh-ops
+      name: dsh-remote-ssh-ops

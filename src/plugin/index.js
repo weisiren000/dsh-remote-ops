@@ -1,5 +1,4 @@
 import path from 'node:path'
-import os from 'node:os'
 import z from '@deepseek-ai/schemastery'
 import { createControllerStore } from '../controller/store.js'
 import { createHostClient } from '../controller/client.js'
@@ -11,11 +10,12 @@ import { DEFAULT_MAX_REQUEST_BODY_BYTES } from '../http-json.js'
 import { DEFAULT_MAX_INLINE_OUTPUT_BYTES, DEFAULT_MAX_PROCESS_OUTPUT_BYTES } from '../output-limits.js'
 import { DEFAULT_SFTP_LOCK_STALE_MS } from '../controller/sftp.js'
 import { DEFAULT_MAX_JOB_LOG_BYTES } from '../controller/job-log-store.js'
+import { getDefaultControllerDataDir } from '../data-paths.js'
 
-export const name = 'remote-ops'
+export const name = 'remote-ssh-ops'
 export const inject = ['tools', 'systemPrompt', 'webServer']
 
-const DEFAULT_DATA_DIR = path.join(os.homedir(), '.dsh', 'remote-ops')
+const DEFAULT_DATA_DIR = getDefaultControllerDataDir()
 
 export const Config = z.object({
   dataDir: z.string().default(DEFAULT_DATA_DIR),

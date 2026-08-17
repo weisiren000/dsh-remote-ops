@@ -11,6 +11,7 @@ import {
   isPairingCodeExpired,
 } from '../pairing.js'
 import { DEFAULT_PAIRING_TTL_MS } from '../protocol.js'
+import { getDefaultHostdDataDir } from '../data-paths.js'
 
 function resolveDialect(platform = process.platform) {
   return platform === 'win32' ? 'pwsh' : 'bash'
@@ -59,7 +60,7 @@ function loadRecord(filePath) {
 }
 
 export async function createHostState(options = {}) {
-  const dataDir = options.dataDir ?? path.join(os.homedir(), '.dsh', 'remote-ops', 'hostd')
+  const dataDir = options.dataDir ?? getDefaultHostdDataDir()
   const now = options.now ?? Date.now
   const filePath = path.join(dataDir, 'host.json')
   await mkdir(dataDir, { recursive: true })
