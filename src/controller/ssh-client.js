@@ -11,6 +11,12 @@ import {
   writeSftpFile,
 } from './sftp.js'
 import { execChannel } from './ssh-exec.js'
+import { createKeyboardInteractiveAuth } from './ssh-auth.js'
+import {
+  installPublicKey,
+  publicKeyFromPrivate,
+  removePublicKey,
+} from './ssh-key-provisioning.js'
 
 export { execChannel } from './ssh-exec.js'
 
@@ -26,6 +32,7 @@ function codedError(code, message, details = {}) {
 }
 
 function connectionError(error) {
+  if (error?.code === 'SSH_INTERACTIVE_AUTH_UNSUPPORTED') return error
   if (error?.code === 'AUTH_FAILED' || error?.level === 'client-authentication') {
     return codedError('SSH_AUTH_FAILED', 'SSH 身份认证失败', { cause: error })
   }
@@ -62,9 +69,21 @@ function openConnection(config) {
     const connection = new Client()
     let actualFingerprint = null
     let settled = false
+    let interactiveAuth
+    const clearInteractiveAuth = () => {
+      if (!interactiveAuth) return
+      // ssh2 会缓存认证配置，认证结束后主动清除其中的密码引用。
+      config.password = undefined
+      connection.config.password = undefined
+      connection.config.authHandler = undefined
+      connection.removeListener('keyboard-interactive', interactiveAuth.handle)
+      interactiveAuth.clear()
+      interactiveAuth = undefined
+    }
     const fail = (error) => {
       if (settled) return
       settled = true
+      clearInteractiveAuth()
       connection.end()
       if (actualFingerprint && !config.hostFingerprint) {
         reject(codedError(
@@ -86,19 +105,31 @@ function openConnection(config) {
     }
     connection.once('ready', () => {
       if (settled) return
+      const readyError = interactiveAuth?.readyError()
+      if (readyError) {
+        fail(readyError)
+        return
+      }
       settled = true
+      clearInteractiveAuth()
       resolve({ connection, fingerprint: actualFingerprint })
     })
     connection.once('error', fail)
     connection.once('close', () => {
       if (!settled) fail(new Error('SSH 连接在握手完成前关闭'))
     })
+    if (config.password) {
+      interactiveAuth = createKeyboardInteractiveAuth(config.password, fail)
+      connection.on('keyboard-interactive', interactiveAuth.handle)
+    }
     connection.connect({
       host: config.sshHost,
       port: config.port,
       username: config.username,
       password: config.password,
       privateKey: config.privateKey,
+      tryKeyboard: Boolean(interactiveAuth),
+      authHandler: interactiveAuth?.authHandler,
       readyTimeout: CONNECT_TIMEOUT_MS,
       keepaliveInterval: 10_000,
       keepaliveCountMax: 3,
@@ -134,64 +165,24 @@ async function inspectRemote(connection) {
   return { hostname: lines[0], cwd, os: 'windows', dialect: 'pwsh' }
 }
 
-async function installPublicKey(connection, publicKey, dialect) {
-  if (dialect === 'pwsh') {
-    const key = quotePowerShell(publicKey.trim())
-    const command = [
-      `$ssh = Join-Path $env:USERPROFILE '.ssh'`,
-      `New-Item -ItemType Directory -Force -Path $ssh | Out-Null`,
-      `$auth = Join-Path $ssh 'authorized_keys'`,
-      `if (!(Test-Path -LiteralPath $auth)) { New-Item -ItemType File -Force -Path $auth | Out-Null }`,
-      `$key = ${key}`,
-      `if (@(Get-Content -LiteralPath $auth -ErrorAction SilentlyContinue) -notcontains $key) { Add-Content -LiteralPath $auth -Value $key }`,
-    ].join('; ')
-    const result = await execChannel(connection, `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encodePowerShell(command)}`)
-    if (result.exitCode !== 0) {
-      throw codedError('SSH_KEY_INSTALL_FAILED', result.stderr.trim() || '无法安装 DSH 专用 SSH 密钥')
-    }
-    return
+function sshHostRecord({ input, target, remote, hostId, fingerprint, authMode, privateKeyPath }) {
+  return {
+    hostId,
+    displayName: input.displayName || remote.hostname || target.sshHost,
+    address: `ssh://${target.sshHost}:${target.port}`,
+    transport: 'ssh',
+    sshHost: target.sshHost,
+    sshPort: target.port,
+    sshUsername: target.username,
+    hostFingerprint: fingerprint,
+    authMode,
+    ...(privateKeyPath ? { privateKeyPath } : {}),
+    online: true,
+    cwd: input.workdir || remote.cwd,
+    os: remote.os,
+    dialect: remote.dialect,
+    lastHeartbeatAt: Date.now(),
   }
-  const key = quotePosix(publicKey.trim())
-  const command = [
-    'umask 077',
-    'mkdir -p "$HOME/.ssh"',
-    'touch "$HOME/.ssh/authorized_keys"',
-    'chmod 700 "$HOME/.ssh"',
-    'chmod 600 "$HOME/.ssh/authorized_keys"',
-    `(grep -qxF ${key} "$HOME/.ssh/authorized_keys" || printf '%s\\n' ${key} >> "$HOME/.ssh/authorized_keys")`,
-  ].join(' && ')
-  const result = await execChannel(connection, command)
-  if (result.exitCode !== 0) {
-    throw codedError('SSH_KEY_INSTALL_FAILED', result.stderr.trim() || '无法安装 DSH 专用 SSH 密钥')
-  }
-}
-
-async function removePublicKey(connection, publicKey, dialect) {
-  if (dialect === 'pwsh') {
-    const key = quotePowerShell(publicKey.trim())
-    const command = [
-      `$auth = Join-Path (Join-Path $env:USERPROFILE '.ssh') 'authorized_keys'`,
-      `if (Test-Path -LiteralPath $auth) { $key = ${key}; $remaining = [string[]]@(Get-Content -LiteralPath $auth -ErrorAction SilentlyContinue | Where-Object { $_ -ne $key }); [IO.File]::WriteAllLines($auth, $remaining) }`,
-    ].join('; ')
-    await execChannel(connection, `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encodePowerShell(command)}`)
-    return
-  }
-  const key = quotePosix(publicKey.trim())
-  const command = 'if [ -f "$HOME/.ssh/authorized_keys" ]; then '
-    + [
-    'tmp="$HOME/.ssh/authorized_keys.dsh-tmp"',
-    `grep -vxF ${key} "$HOME/.ssh/authorized_keys" > "$tmp"`,
-    'status=$?',
-    'if [ "$status" -le 1 ]; then mv "$tmp" "$HOME/.ssh/authorized_keys"; else rm -f "$tmp"; exit "$status"; fi',
-  ].join('; ')
-    + '; fi'
-  await execChannel(connection, command)
-}
-
-function publicKeyFromPrivate(privateKey) {
-  const parsed = utils.parseKey(privateKey)
-  const key = Array.isArray(parsed) ? parsed[0] : parsed
-  return key?.getPublicSSH?.()
 }
 
 export function createSshClient({ keysDir, sftpLockStaleMs, openConnection: open = openConnection }) {
@@ -248,6 +239,9 @@ export function createSshClient({ keysDir, sftpLockStaleMs, openConnection: open
     assertActive()
     const current = sessions.get(host.hostId)
     if (current) return current
+    if (host.authMode === 'password_session') {
+      throw codedError('SSH_REAUTH_REQUIRED', 'SSH 会话已断开，请重新输入登录密码')
+    }
     const pending = connecting.get(host.hostId)
     if (pending) return pending
     const task = (async () => {
@@ -284,6 +278,28 @@ export function createSshClient({ keysDir, sftpLockStaleMs, openConnection: open
     }
   }
 
+  const reauthenticate = async (host, options) => {
+    if (!options.password) {
+      throw codedError('SSH_REAUTH_REQUIRED', 'SSH 会话已断开，请重新输入登录密码')
+    }
+    const opened = await open({
+      sshHost: host.sshHost,
+      port: host.sshPort,
+      username: host.sshUsername,
+      password: options.password,
+      hostFingerprint: options.hostFingerprint ?? host.hostFingerprint,
+    })
+    try {
+      const remote = await inspectRemote(opened.connection)
+      rememberSession(host.hostId, opened.connection)
+      reconnectState.delete(host.hostId)
+      return { hostId: host.hostId, ...remote, ts: Date.now() }
+    } catch (error) {
+      opened.connection.end()
+      throw error
+    }
+  }
+
   return {
     async connect(input) {
       assertActive()
@@ -310,30 +326,44 @@ export function createSshClient({ keysDir, sftpLockStaleMs, openConnection: open
           assertActive()
           await installPublicKey(opened.connection, keys.public, remote.dialect)
           assertActive()
-          verified = await open({
-            ...target,
-            privateKey: keys.private,
-            hostFingerprint: opened.fingerprint,
-          })
+          try {
+            verified = await open({
+              ...target,
+              privateKey: keys.private,
+              hostFingerprint: opened.fingerprint,
+            })
+          } catch (error) {
+            if (error?.code !== 'SSH_AUTH_FAILED') throw error
+            // 网关只接受会话密码时，必须先回滚目标机公钥再保留首次连接。
+            await removePublicKey(
+              opened.connection,
+              keys.public,
+              remote.dialect,
+              'SSH_KEY_ROLLBACK_FAILED',
+            )
+            await unlink(privateKeyPath).catch(() => {})
+            rememberSession(hostId, opened.connection)
+            return sshHostRecord({
+              input,
+              target,
+              remote,
+              hostId,
+              fingerprint: opened.fingerprint,
+              authMode: 'password_session',
+            })
+          }
           assertActive()
           opened.connection.end()
           rememberSession(hostId, verified.connection)
-          return {
+          return sshHostRecord({
+            input,
+            target,
+            remote,
             hostId,
-            displayName: input.displayName || remote.hostname || target.sshHost,
-            address: `ssh://${target.sshHost}:${target.port}`,
-            transport: 'ssh',
-            sshHost: target.sshHost,
-            sshPort: target.port,
-            sshUsername: target.username,
-            hostFingerprint: opened.fingerprint,
+            fingerprint: opened.fingerprint,
+            authMode: 'key',
             privateKeyPath,
-            online: true,
-            cwd: input.workdir || remote.cwd,
-            os: remote.os,
-            dialect: remote.dialect,
-            lastHeartbeatAt: Date.now(),
-          }
+          })
         } catch (error) {
           opened?.connection?.end?.()
           verified?.connection?.end?.()
@@ -377,10 +407,11 @@ export function createSshClient({ keysDir, sftpLockStaleMs, openConnection: open
       const connection = await ensureSession(host)
       return downloadSftpFile(connection, remotePath)
     },
-    async reconnect(host) {
+    async reconnect(host, options = {}) {
       sessions.get(host.hostId)?.end()
       sessions.delete(host.hostId)
       reconnectState.delete(host.hostId)
+      if (host.authMode === 'password_session') return reauthenticate(host, options)
       return this.heartbeat(host)
     },
     async exec(host, spec) {

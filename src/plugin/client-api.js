@@ -63,11 +63,16 @@ export function createSettingsClient(fetchImpl = fetch, xhrFactory = () => new X
         method: 'DELETE',
       }).then(parse)
     },
-    reconnect(hostId, hostFingerprint) {
+    reconnect(hostId, options = {}) {
+      const normalized = typeof options === 'string' ? { hostFingerprint: options } : options
+      const { hostFingerprint, password } = normalized
       const init = { method: 'POST' }
-      if (hostFingerprint) {
+      if (hostFingerprint || password) {
         init.headers = { 'content-type': 'application/json' }
-        init.body = JSON.stringify({ host_fingerprint: hostFingerprint })
+        init.body = JSON.stringify({
+          ...(hostFingerprint ? { host_fingerprint: hostFingerprint } : {}),
+          ...(password ? { password } : {}),
+        })
       }
       return fetchImpl(`${PREFIX}/hosts/${encodeURIComponent(hostId)}/reconnect`, init).then(parse)
     },

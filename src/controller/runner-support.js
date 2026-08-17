@@ -26,6 +26,7 @@ export function hostStatus(error) {
     case 'SSH_KEY_MISSING': return 'key_missing'
     case 'SSH_AUTH_FAILED':
     case 'SSH_PASSWORD_REQUIRED': return 'auth_failed'
+    case 'SSH_REAUTH_REQUIRED': return 'reauth_required'
     case 'HOST_KEY_CHANGED':
     case 'HOST_KEY_UNTRUSTED': return 'degraded'
     default: return 'offline'

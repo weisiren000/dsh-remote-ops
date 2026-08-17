@@ -4,12 +4,305 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
+import ssh2 from 'ssh2'
 import { createSshClient, execChannel } from '../src/controller/ssh-client.js'
+
+const { Server, utils } = ssh2
+const TEST_PASSWORD = 'test-login-password'
+const TEST_USERNAME = 'tenant#user#remote'
+const TEST_HOST_KEY = utils.generateKeyPairSync('rsa', { bits: 2048 }).private
 
 function deferred() {
   let resolve
   const promise = new Promise((done) => { resolve = done })
   return { promise, resolve }
+}
+
+async function startSshAuthServer({
+  mode,
+  prompts,
+  followupPrompts,
+  instructions = '',
+  partialPassword = false,
+  acceptEmpty = false,
+  methods = mode === 'keyboard-interactive'
+    ? ['keyboard-interactive', 'publickey']
+    : ['password', 'keyboard-interactive', 'publickey'],
+}) {
+  const attempts = []
+  const answers = []
+  const server = new Server({ hostKeys: [TEST_HOST_KEY] }, (client) => {
+    client.on('error', () => {})
+    client.on('authentication', (context) => {
+      attempts.push({ method: context.method, username: context.username })
+      if (context.method === 'publickey') {
+        context.accept()
+        return
+      }
+      if (mode === 'password' && context.method === 'password') {
+        if (context.password === TEST_PASSWORD) context.accept()
+        else context.reject(['password', 'publickey'])
+        return
+      }
+      if (partialPassword && context.method === 'password') {
+        context.reject(['keyboard-interactive'], true)
+        return
+      }
+      if (mode === 'keyboard-interactive' && context.method === 'keyboard-interactive') {
+        context.prompt(prompts, '测试认证', instructions, (responses) => {
+          if (!Array.isArray(responses)) return
+          answers.push(responses)
+          if (acceptEmpty && responses.length === 0) {
+            context.accept()
+            return
+          }
+          if (responses.length !== 1 || responses[0] !== TEST_PASSWORD) {
+            context.reject(['keyboard-interactive', 'publickey'])
+            return
+          }
+          if (!followupPrompts) {
+            context.accept()
+            return
+          }
+          context.prompt(followupPrompts, '附加认证', '', (followupAnswers) => {
+            if (Array.isArray(followupAnswers)) answers.push(followupAnswers)
+            context.reject(['keyboard-interactive', 'publickey'])
+          })
+        })
+        return
+      }
+      context.reject(methods)
+    })
+    client.on('ready', () => {
+      client.on('session', (accept) => {
+        const session = accept()
+        session.on('exec', (acceptExec, _rejectExec, info) => {
+          const stream = acceptExec()
+          if (info.command.startsWith('hostname;')) {
+            stream.write('test-host\n__DSH_CWD__/srv/test\nLinux\n')
+          }
+          stream.exit(0)
+          stream.end()
+        })
+      })
+    })
+  })
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  return {
+    port: server.address().port,
+    attempts,
+    answers,
+    close: () => new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    }),
+  }
+}
+
+async function connectAfterTrust(client, port) {
+  const input = {
+    host: '127.0.0.1',
+    port,
+    username: TEST_USERNAME,
+    password: TEST_PASSWORD,
+  }
+  let fingerprint
+  await assert.rejects(client.connect(input), (error) => {
+    fingerprint = error.fingerprint
+    return error.code === 'HOST_KEY_UNTRUSTED' && Boolean(fingerprint)
+  })
+  return client.connect({ ...input, hostFingerprint: fingerprint })
+}
+
+async function closeSshAuthFixture(client, server, keysDir) {
+  await client.dispose()
+  await server.close()
+  await fs.rm(keysDir, { recursive: true, force: true })
+}
+
+test('SSH 首次连接兼容普通 password 并用专用私钥完成二次认证', async () => {
+  const server = await startSshAuthServer({ mode: 'password' })
+  const keysDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ssh-password-'))
+  const client = createSshClient({ keysDir, sftpLockStaleMs: 60_000 })
+  const connections = []
+  const originalConnect = ssh2.Client.prototype.connect
+  ssh2.Client.prototype.connect = function (...args) {
+    connections.push(this)
+    return originalConnect.apply(this, args)
+  }
+  try {
+    const host = await connectAfterTrust(client, server.port)
+    assert.deepEqual([host.sshUsername, host.authMode], [TEST_USERNAME, 'key'])
+    assert.ok(server.attempts.some(({ method }) => method === 'password'))
+    assert.ok(server.attempts.some(({ method }) => method === 'publickey'))
+    assert.ok(connections.every(({ config }) => config.password === undefined))
+  } finally {
+    ssh2.Client.prototype.connect = originalConnect
+    await closeSshAuthFixture(client, server, keysDir)
+  }
+})
+
+test('SSH 首次连接用登录密码回答明确的 keyboard-interactive 密码挑战', async () => {
+  const server = await startSshAuthServer({
+    mode: 'keyboard-interactive',
+    prompts: [{ prompt: 'Password: ', echo: false }],
+  })
+  const keysDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ssh-keyboard-'))
+  const client = createSshClient({ keysDir, sftpLockStaleMs: 60_000 })
+  try {
+    const host = await connectAfterTrust(client, server.port)
+    assert.equal(host.sshUsername, TEST_USERNAME)
+    assert.deepEqual(server.answers, [[TEST_PASSWORD]])
+    assert.ok(server.attempts.some(({ method }) => method === 'publickey'))
+    assert.ok(server.attempts.every(({ method }) => method !== 'password'))
+    assert.ok(server.attempts.every(({ username }) => username === TEST_USERNAME))
+  } finally {
+    await closeSshAuthFixture(client, server, keysDir)
+  }
+})
+
+test('SSH 拒绝向 keyboard-interactive OTP 挑战自动提交登录密码', async () => {
+  const server = await startSshAuthServer({
+    mode: 'keyboard-interactive',
+    prompts: [{ prompt: 'One-time verification code: ', echo: false }],
+  })
+  const keysDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ssh-otp-'))
+  const client = createSshClient({ keysDir, sftpLockStaleMs: 60_000 })
+  try {
+    await assert.rejects(connectAfterTrust(client, server.port), (error) => {
+      assert.equal(error.code, 'SSH_INTERACTIVE_AUTH_UNSUPPORTED')
+      assert.match(error.message, /OTP|MFA|验证码/)
+      assert.equal(error.cause, undefined)
+      assert.doesNotMatch(error.message, new RegExp(TEST_PASSWORD))
+      assert.doesNotMatch(error.message, /One-time verification code/)
+      return true
+    })
+    assert.deepEqual(server.answers, [])
+  } finally {
+    await closeSshAuthFixture(client, server, keysDir)
+  }
+})
+
+test('SSH 回答密码后拒绝第二轮 keyboard-interactive OTP 挑战', async () => {
+  const server = await startSshAuthServer({
+    mode: 'keyboard-interactive',
+    prompts: [{ prompt: 'Password: ', echo: false }],
+    followupPrompts: [{ prompt: 'OTP: ', echo: false }],
+  })
+  const keysDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ssh-multistep-'))
+  const client = createSshClient({ keysDir, sftpLockStaleMs: 60_000 })
+  try {
+    await assert.rejects(connectAfterTrust(client, server.port), (error) => (
+      error.code === 'SSH_INTERACTIVE_AUTH_UNSUPPORTED'
+    ))
+    assert.deepEqual(server.answers, [[TEST_PASSWORD]])
+  } finally {
+    await closeSshAuthFixture(client, server, keysDir)
+  }
+})
+
+test('SSH 拒绝说明文字中要求 Duo Push 审批的伪密码挑战', async () => {
+  const server = await startSshAuthServer({
+    mode: 'keyboard-interactive',
+    prompts: [{ prompt: 'Password: ', echo: false }],
+    instructions: 'Approve the Duo Push notification before continuing.',
+  })
+  const keysDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ssh-push-mfa-'))
+  const client = createSshClient({ keysDir, sftpLockStaleMs: 60_000 })
+  try {
+    await assert.rejects(connectAfterTrust(client, server.port), (error) => (
+      error.code === 'SSH_INTERACTIVE_AUTH_UNSUPPORTED'
+    ))
+    assert.deepEqual(server.answers, [])
+  } finally {
+    await closeSshAuthFixture(client, server, keysDir)
+  }
+})
+
+for (const prompt of [
+  'Password + SMS code: ', 'Password token: ',
+  'Password recovery code: ', 'Password for second factor: ',
+  'Password for additional authentication factor: ', 'Password for security key: ',
+  'Password for additional-factor: ', 'Additional factor\'s password: ',
+  'Secondary factor\'s password: ',
+]) {
+  test(`SSH 拒绝组合认证提示：${prompt.trim()}`, async () => {
+    const server = await startSshAuthServer({
+      mode: 'keyboard-interactive',
+      prompts: [{ prompt, echo: false }],
+    })
+    const keysDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ssh-combined-mfa-'))
+    const client = createSshClient({ keysDir, sftpLockStaleMs: 60_000 })
+    try {
+      await assert.rejects(connectAfterTrust(client, server.port), (error) => (
+        error.code === 'SSH_INTERACTIVE_AUTH_UNSUPPORTED'
+      ))
+      assert.deepEqual(server.answers, [])
+    } finally {
+      await closeSshAuthFixture(client, server, keysDir)
+    }
+  })
+}
+
+test('SSH 拒绝 password 部分成功后继续要求交互式认证', async () => {
+  const server = await startSshAuthServer({
+    mode: 'keyboard-interactive',
+    partialPassword: true,
+    methods: ['password', 'keyboard-interactive'],
+    prompts: [{ prompt: 'Password: ', echo: false }],
+  })
+  const keysDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ssh-partial-auth-'))
+  const client = createSshClient({ keysDir, sftpLockStaleMs: 60_000 })
+  try {
+    await assert.rejects(connectAfterTrust(client, server.port), (error) => (
+      error.code === 'SSH_INTERACTIVE_AUTH_UNSUPPORTED'
+    ))
+    assert.deepEqual(server.answers, [])
+  } finally {
+    await closeSshAuthFixture(client, server, keysDir)
+  }
+})
+
+test('SSH 拒绝零提示 keyboard-interactive 外部确认', async () => {
+  const server = await startSshAuthServer({
+    mode: 'keyboard-interactive',
+    prompts: [],
+    acceptEmpty: true,
+  })
+  const keysDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ssh-zero-prompt-'))
+  const client = createSshClient({ keysDir, sftpLockStaleMs: 60_000 })
+  try {
+    await assert.rejects(connectAfterTrust(client, server.port), (error) => (
+      error.code === 'SSH_INTERACTIVE_AUTH_UNSUPPORTED'
+    ))
+    assert.deepEqual(server.answers, [[]])
+  } finally {
+    await closeSshAuthFixture(client, server, keysDir)
+  }
+})
+
+for (const [name, prompts] of [
+  ['未知挑战', [{ prompt: 'Security question: ', echo: false }]],
+  ['密码与验证码混合挑战', [
+    { prompt: 'Password: ', echo: false },
+    { prompt: 'Verification code: ', echo: false },
+  ]],
+]) {
+  test(`SSH 拒绝向 keyboard-interactive ${name}自动提交登录密码`, async () => {
+    const server = await startSshAuthServer({ mode: 'keyboard-interactive', prompts })
+    const keysDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ssh-unknown-'))
+    const client = createSshClient({ keysDir, sftpLockStaleMs: 60_000 })
+    try {
+      await assert.rejects(connectAfterTrust(client, server.port), (error) => (
+        error.code === 'SSH_INTERACTIVE_AUTH_UNSUPPORTED'
+      ))
+      assert.deepEqual(server.answers, [])
+    } finally {
+      await closeSshAuthFixture(client, server, keysDir)
+    }
+  })
 }
 
 test('SSH 取消向真实 channel 发送 TERM 后关闭本地 channel', async () => {

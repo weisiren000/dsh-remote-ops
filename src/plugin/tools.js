@@ -10,7 +10,6 @@ import {
   projectHostExecution,
   renderExecResult,
 } from './render.js'
-import { registerRemoteToolPolicy } from './policy.js'
 import { registerLocatorTool } from './locator-tool.js'
 import {
   CHANGE_SCHEMA,
@@ -85,14 +84,12 @@ export function registerHostTools({
   runner,
   jobs,
   getJobs,
-  onPreExecute,
   maxInlineOutputBytes,
 }) {
   const register = (definition) => tools.register(defineTool(definition))
   const backgroundMeta = new Map()
   const agentTargets = new WeakMap()
   const currentJobs = () => getJobs?.() ?? jobs
-  registerRemoteToolPolicy({ tools, onPreExecute })
   registerLocatorTool(register, runner, maxInlineOutputBytes)
 
   if (systemPrompt?.section) {

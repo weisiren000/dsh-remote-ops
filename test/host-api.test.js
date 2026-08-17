@@ -141,3 +141,119 @@ test('文件分页拒绝 NaN、小数和负数参数', async () => {
   }
   assert.equal(listCalls, 0)
 })
+
+test('SSH 直连从 JSON 到控制器完整保留包含多个 # 的用户名', async () => {
+  let received
+  const handle = createHostApiHandler({
+    runner: {
+      async connectSsh(input) {
+        received = input
+        return {
+          hostId: 'ssh-host',
+          displayName: 'SSH host',
+          address: 'ssh://127.0.0.1:2222',
+          transport: 'ssh',
+          sshUsername: input.username,
+          online: true,
+        }
+      },
+      getCurrentHost() { return null },
+    },
+  })
+  const response = mockRes()
+
+  await handle(mockReq({
+    method: 'POST',
+    url: '/remote-ops/v1/hosts/ssh',
+    body: {
+      host: '127.0.0.1',
+      port: 2222,
+      username: 'tenant#user#remote',
+      password: 'memory-only-password',
+    },
+  }), response)
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(received.username, 'tenant#user#remote')
+  assert.equal(response.body.ssh_username, 'tenant#user#remote')
+})
+
+test('无法自动处理的 SSH 交互式认证返回 401 和专用错误码', async () => {
+  const handle = createHostApiHandler({
+    runner: {
+      async connectSsh() {
+        throw Object.assign(new Error('服务器要求无法自动处理的交互式认证'), {
+          code: 'SSH_INTERACTIVE_AUTH_UNSUPPORTED',
+        })
+      },
+    },
+  })
+  const response = mockRes()
+
+  await handle(mockReq({
+    method: 'POST',
+    url: '/remote-ops/v1/hosts/ssh',
+    body: { host: '127.0.0.1', port: 22, username: 'user', password: 'secret' },
+  }), response)
+
+  assert.equal(response.statusCode, 401)
+  assert.equal(response.body.code, 'SSH_INTERACTIVE_AUTH_UNSUPPORTED')
+})
+
+test('SSH 重认证透传临时密码并返回认证模式，不把密码回显到主机数据', async () => {
+  let received
+  const handle = createHostApiHandler({
+    runner: {
+      async reconnectHost(hostId, options) {
+        received = { hostId, options }
+        return {
+          hostId,
+          displayName: 'gateway host',
+          transport: 'ssh',
+          authMode: 'password_session',
+          sshUsername: 'tenant#user#asset',
+          password: 'must-not-return',
+          online: true,
+        }
+      },
+      getCurrentHost() { return null },
+    },
+  })
+  const response = mockRes()
+
+  await handle(mockReq({
+    method: 'POST',
+    url: '/remote-ops/v1/hosts/ssh-host/reconnect',
+    body: { host_fingerprint: 'SHA256:new', password: 'memory-only-password' },
+  }), response)
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(received, {
+    hostId: 'ssh-host',
+    options: { hostFingerprint: 'SHA256:new', password: 'memory-only-password' },
+  })
+  assert.equal(response.body.auth_mode, 'password_session')
+  assert.equal(response.body.password, undefined)
+})
+
+test('SSH 会话丢失返回 401 和重新认证错误码', async () => {
+  const handle = createHostApiHandler({
+    runner: {
+      async reconnectHost() {
+        throw Object.assign(new Error('SSH 会话已断开，请重新输入登录密码'), {
+          code: 'SSH_REAUTH_REQUIRED',
+        })
+      },
+    },
+  })
+  const response = mockRes()
+
+  await handle(mockReq({
+    method: 'POST',
+    url: '/remote-ops/v1/hosts/ssh-host/reconnect',
+    body: {},
+  }), response)
+
+  assert.equal(response.statusCode, 401)
+  assert.equal(response.body.code, 'SSH_REAUTH_REQUIRED')
+})

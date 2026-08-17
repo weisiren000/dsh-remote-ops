@@ -266,31 +266,21 @@ test('后台能力缺失时不把后台请求静默改成前台', async () => {
   assert.equal(executed, false)
 })
 
-test('远程工具通过 pre-execute 请求审批且无 Agent 调用被 guard 拒绝', async () => {
+test('远程工具不注册审批策略或 Agent guard', () => {
   const registered = []
-  let policy
-  let guard
+  let policyRegistrations = 0
+  let guardRegistrations = 0
   registerHostTools({
     tools: {
       register(tool) { registered.push(tool) },
-      guard(value) { guard = value; return () => {} },
+      guard() { guardRegistrations += 1; return () => {} },
     },
     runner: { async list() { return [] } },
-    onPreExecute(listener) { policy = listener },
+    onPreExecute() { policyRegistrations += 1 },
   })
-  assert.equal(typeof policy, 'function')
-  assert.equal(typeof guard, 'function')
-  const exec = { name: 'host_write_file', agent: { id: 'session-a' } }
-  assert.deepEqual(await policy(exec, async () => ({ kind: 'allow' })), {
-    kind: 'ask',
-    reason: '远程文件写入需要用户确认',
-  })
-  assert.deepEqual(await policy(exec, async () => ({ kind: 'deny', reason: 'denied downstream' })), {
-    kind: 'deny', reason: 'denied downstream',
-  })
-  assert.match(guard({ name: 'host_bash' }), /Agent/)
-  assert.equal(guard({ name: 'host_bash', agent: { id: 'session-a' } }), undefined)
-  assert.equal(guard({ name: 'bash' }), undefined)
+  assert.ok(registered.length > 0)
+  assert.equal(policyRegistrations, 0)
+  assert.equal(guardRegistrations, 0)
 })
 
 test('host_read_file 按 UTF-8 字节限制模型结果并返回远程文件 locator', async () => {

@@ -10,6 +10,10 @@
 - **高级配对**：远端运行 `remote-hostd`，本地输入地址和一次性配对码。适合已经部署 hostd 的机器。
 - **远程工作台**：会话标题栏的“服务器”入口用于浏览远程文件、运行远程命令和审阅远程文件变更。
 
+## 界面预览
+
+![dsh-remote-ops 远程工作台界面预览](docs/assets/remote-workbench-preview.png)
+
 ## 安装
 
 ### 从 GitHub 安装（推荐）
@@ -17,7 +21,7 @@
 安装当前稳定版本：
 
 ```bash
-dsh plugin --profile web add github:weisiren000/dsh-remote-ops#v0.0.7
+dsh plugin --profile web add github:weisiren000/dsh-remote-ops#v0.0.8
 ```
 
 DSH 会自动把插件安装到 Web profile，并将 `dsh-remote-ops` 注册到 `dsh.profile.bundles`。不需要克隆仓库、手动安装依赖、构建客户端或修改 profile 的 `package.json`。
@@ -25,7 +29,7 @@ DSH 会自动把插件安装到 Web profile，并将 `dsh-remote-ops` 注册到 
 如果系统没有全局 `dsh` 命令，可以通过 `npx` 执行：
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add github:weisiren000/dsh-remote-ops#v0.0.7
+npx @deepseek-ai/dsh plugin --profile web add github:weisiren000/dsh-remote-ops#v0.0.8
 ```
 
 安装命令需要本机可以使用 [Git](https://git-scm.com/) 和 pnpm。使用 `npx` 时还需要 Node.js。

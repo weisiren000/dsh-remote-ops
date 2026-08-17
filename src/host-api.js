@@ -6,6 +6,13 @@ import {
   downloadHeaders,
 } from './file-transfer.js'
 
+const SSH_AUTH_ERROR_CODES = new Set([
+  'SSH_CONNECT_FAILED',
+  'SSH_AUTH_FAILED',
+  'SSH_INTERACTIVE_AUTH_UNSUPPORTED',
+  'SSH_REAUTH_REQUIRED',
+])
+
 export function isLoopbackAddress(address) {
   return address === '127.0.0.1'
     || address === '::1'
@@ -88,6 +95,7 @@ function publicHost(host, currentHostId, taskStats = {}) {
     ssh_host: host.sshHost,
     ssh_port: host.sshPort,
     ssh_username: host.sshUsername,
+    auth_mode: host.transport === 'ssh' ? host.authMode ?? 'key' : undefined,
     online: host.online,
     cwd: host.cwd,
     os: host.os,
@@ -224,6 +232,7 @@ export function createHostApiHandler({
         const body = await readJsonBody(req, maxRequestBodyBytes)
         const host = await runner.reconnectHost(route.hostId, {
           hostFingerprint: body.host_fingerprint,
+          password: body.password,
         })
         const current = runner.getCurrentHost?.()
         json(res, 200, publicHost(host, current?.hostId))
@@ -383,7 +392,7 @@ export function createHostApiHandler({
           ? 403
           : code === 'HOST_KEY_UNTRUSTED' || code === 'HOST_KEY_CHANGED'
           ? 409
-          : code === 'SSH_CONNECT_FAILED' || code === 'SSH_AUTH_FAILED'
+          : SSH_AUTH_ERROR_CODES.has(code)
             ? 401
             : code === 'REMOTE_FILE_CONFLICT'
               ? 409

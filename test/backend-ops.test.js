@@ -99,6 +99,30 @@ test('确认变更后的 SSH 指纹时先验证再保存新指纹', async () => 
   assert.equal(store.getHost('host-a').hostFingerprint, 'new')
 })
 
+test('Runner 重认证把临时密码和指纹传给 SSH 客户端但不写入主机', async () => {
+  const store = await createControllerStore(await tempDir())
+  await store.upsertHost(hostFixture({ transport: 'ssh', authMode: 'password_session' }))
+  let received
+  const runner = createRunner({
+    store,
+    client: {
+      async reconnect(host, options) {
+        received = { host, options }
+        return { cwd: host.cwd, os: host.os, dialect: host.dialect, ts: Date.now() }
+      },
+    },
+  })
+
+  await runner.reconnectHost('host-a', {
+    hostFingerprint: 'SHA256:new',
+    password: 'memory-only-password',
+  })
+
+  assert.equal(received.options.password, 'memory-only-password')
+  assert.equal(received.options.hostFingerprint, 'SHA256:new')
+  assert.equal(store.getHost('host-a').password, undefined)
+})
+
 test('主机列表包含六种任务状态统计', async () => {
   const store = await createControllerStore(await tempDir())
   await store.upsertHost(hostFixture())

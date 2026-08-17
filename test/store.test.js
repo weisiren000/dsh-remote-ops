@@ -135,16 +135,23 @@ test('兼容旧版 hosts.json 和 jobs.json，并为运维字段提供默认值'
   assert.equal(store.getCurrentHost().hostId, 'legacy-host')
 })
 
-test('主机记录中的密码不会写入 hosts.json', async () => {
+test('SSH 认证模式可持久化且密码不会进入主机内存或任何主机数据文件', async () => {
   const dataDir = await tempDir()
   const store = await createControllerStore(dataDir)
   await store.upsertHost({
     ...hostFixture({ hostId: 'ssh-host', transport: 'ssh' }),
+    authMode: 'password_session',
     password: 'must-not-persist',
   })
-  const persisted = await fs.readFile(path.join(dataDir, 'hosts.json'), 'utf8')
-  assert.doesNotMatch(persisted, /must-not-persist/)
-  assert.doesNotMatch(persisted, /password/i)
+  const publicHost = store.getHost('ssh-host')
+  assert.equal(publicHost.authMode, 'password_session')
+  assert.equal(publicHost.password, undefined)
+  assert.equal(store.listHosts()[0].password, undefined)
+  const hostsText = await fs.readFile(path.join(dataDir, 'hosts.json'), 'utf8')
+  const secretsText = await fs.readFile(path.join(dataDir, 'host-secrets.json'), 'utf8')
+  assert.doesNotMatch(hostsText, /must-not-persist/)
+  assert.doesNotMatch(secretsText, /must-not-persist/)
+  assert.equal(JSON.parse(secretsText).host_records[0].auth_mode, 'password_session')
 })
 
 test('日志尾部读取只返回请求长度，不加载完整日志内容', async () => {

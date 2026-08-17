@@ -127,6 +127,8 @@ export const CSS = `
   .remoteOps__facts dt { color: var(--ro-dim); font-size: 10px; }
   .remoteOps__facts dd { color: var(--ro-muted); font-size: 12px; margin: 3px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .remoteOps__hostError { color: var(--ro-danger); font-size: 12px; margin: 0 0 10px; }
+  .remoteOps__reauthForm { align-items: end; border-block: 1px solid var(--ro-line); display: grid; gap: 8px; grid-template-columns: minmax(180px, 1fr) auto auto; margin: 10px 0; padding: 10px 0; }
+  .remoteOps__reauthForm input { color: var(--ro-text); font: inherit; font-size: 12px; min-width: 0; width: 100%; }
   .remoteOps__hostActions { justify-content: flex-start; }
   .remoteOps__hostActions button:hover, .remoteOps__iconButton:hover, .remoteOps__cancel:hover { background: var(--ro-panel-2); color: var(--ro-text); }
   .remoteOps__jobList { display: flex; flex-direction: column; gap: 7px; list-style: none; margin: 0; padding: 0; }
@@ -149,5 +151,5 @@ export const CSS = `
   .remoteOps__danger { background: transparent; border: 1px solid transparent; color: var(--ro-danger); cursor: pointer; font-size: 12px; min-height: 30px; padding: 0 8px; }
   .remoteOps__danger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-danger, rgba(213, 73, 65, .08)); }
   .remoteOps__empty { align-items: center; border: 1px dashed var(--ro-line); color: var(--ro-muted); display: flex; justify-content: center; min-height: 74px; padding: 14px; }
-  @media (max-width: 620px) { .remoteOps__overview { grid-template-columns: 1fr; } .remoteOps__overview div + div { border-left: 0; border-top: 1px solid var(--ro-line); } .remoteOps__connectForm { grid-template-columns: 1fr; } .remoteOps__wideInput { grid-column: auto; } .remoteOps__facts { grid-template-columns: 1fr 1fr; } .remoteOps__factWide { grid-column: 1 / -1; } }
+  @media (max-width: 620px) { .remoteOps__overview { grid-template-columns: 1fr; } .remoteOps__overview div + div { border-left: 0; border-top: 1px solid var(--ro-line); } .remoteOps__connectForm, .remoteOps__reauthForm { grid-template-columns: 1fr; } .remoteOps__wideInput { grid-column: auto; } .remoteOps__facts { grid-template-columns: 1fr 1fr; } .remoteOps__factWide { grid-column: 1 / -1; } }
 `

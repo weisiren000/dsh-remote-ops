@@ -48,6 +48,23 @@ test('运维 API 使用统一路径并传递任务筛选与日志尾部参数', 
   assert.equal(calls[5].url, '/remote-ops/v1/jobs/job%2F1/log?tail=32')
 })
 
+test('SSH password_session 重认证只临时提交密码和可选指纹', async () => {
+  let request
+  const client = createSettingsClient(async (url, options) => {
+    request = { url, options }
+    return response({ ok: true })
+  })
+
+  await client.reconnect('host/1', { hostFingerprint: 'SHA256:new', password: 'memory-only-password' })
+
+  assert.equal(request.url, '/remote-ops/v1/hosts/host%2F1/reconnect')
+  assert.equal(request.options.method, 'POST')
+  assert.deepEqual(JSON.parse(request.options.body), {
+    host_fingerprint: 'SHA256:new',
+    password: 'memory-only-password',
+  })
+})
+
 test('API 错误保留服务端错误码和附加字段', async () => {
   const client = createSettingsClient(async () => response({ error: 'fingerprint changed', code: 'HOST_KEY_CHANGED', fingerprint: 'abc' }, false))
   await assert.rejects(client.health('h1'), (error) => {
@@ -55,6 +72,24 @@ test('API 错误保留服务端错误码和附加字段', async () => {
     assert.equal(error.fingerprint, 'abc')
     return true
   })
+})
+
+test('SSH 直连 JSON 完整保留包含多个 # 的用户名', async () => {
+  let request
+  const client = createSettingsClient(async (url, options) => {
+    request = { url, options }
+    return response({ host_id: 'ssh-host' })
+  })
+
+  await client.ssh({
+    host: '1.180.205.130',
+    port: 2222,
+    username: 'tenant#user#remote',
+    password: 'memory-only-password',
+  })
+
+  assert.equal(request.url, '/remote-ops/v1/hosts/ssh')
+  assert.equal(JSON.parse(request.options.body).username, 'tenant#user#remote')
 })
 
 test('工作区 API 使用编码路径和 snake_case 请求字段', async () => {

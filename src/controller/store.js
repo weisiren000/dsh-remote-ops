@@ -19,6 +19,7 @@ function publicHost(host) {
     deviceToken: _deviceToken,
     privateKeyPath: _privateKeyPath,
     hostFingerprint: _hostFingerprint,
+    password: _password,
     ...rest
   } = host
   return rest
@@ -32,6 +33,7 @@ function toPersistedHost(host) {
     ssh_username: host.sshUsername ?? null,
     host_fingerprint: host.hostFingerprint ?? null,
     private_key_path: host.privateKeyPath ?? null,
+    auth_mode: host.transport === 'ssh' ? host.authMode ?? 'key' : null,
     status: host.status ?? (host.online === false ? 'offline' : 'online'),
     last_error: host.lastError ?? null,
     last_error_at: host.lastErrorAt ?? null,
@@ -49,6 +51,7 @@ function fromPersistedHost(payload, secret = {}) {
     sshUsername: payload.ssh_username ?? undefined,
     hostFingerprint: payload.host_fingerprint ?? undefined,
     privateKeyPath: payload.private_key_path ?? undefined,
+    authMode: payload.transport === 'ssh' ? payload.auth_mode ?? 'key' : undefined,
     status: payload.status ?? (payload.online === false ? 'offline' : 'online'),
     lastError: payload.last_error ?? undefined,
     lastErrorAt: payload.last_error_at ?? undefined,
@@ -269,11 +272,14 @@ export async function createControllerStore(dataDir, options = {}) {
     async upsertHost(record) {
       return queueHostWrite(async () => {
         const previous = hosts.get(record.hostId)
+        // 密码只属于本次认证请求，主机对象和持久化快照都不得保留。
+        const { password: _password, ...safeRecord } = record
+        const { password: _previousPassword, ...safePrevious } = previous ?? {}
         const nextHosts = new Map(hosts)
         const nextSecrets = new Map(secrets)
         const next = {
-          ...previous,
-          ...record,
+          ...safePrevious,
+          ...safeRecord,
           status: record.status ?? (record.online === false ? 'offline' : 'online'),
         }
         nextHosts.set(record.hostId, next)

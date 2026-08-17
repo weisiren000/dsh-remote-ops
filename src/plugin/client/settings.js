@@ -1,5 +1,5 @@
 const STATUS_TEXT = {
-  online: '在线', connecting: '连接中', offline: '离线', auth_failed: '认证失败', key_missing: '缺少密钥', degraded: '降级',
+  online: '在线', connecting: '连接中', offline: '离线', auth_failed: '认证失败', reauth_required: '需要重新认证', key_missing: '缺少密钥', degraded: '降级',
 }
 const JOB_TEXT = {
   running: '执行中', succeeded: '成功', failed: '失败', canceled: '已取消', timed_out: '超时', interrupted: '已中断',
@@ -49,6 +49,7 @@ export function createRemoteHostsTab(React, api, ui = {}) {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
     const [notice, setNotice] = useState(null)
+    const [reauthPasswords, setReauthPasswords] = useState({})
     const [ssh, setSsh] = useState({ host: '', port: '22', username: '', password: '', displayName: '' })
     const [pair, setPair] = useState({ address: '', pairingCode: '', displayName: '' })
     const currentHost = useMemo(() => hosts.find((host) => host.current) ?? null, [hosts])
@@ -97,7 +98,9 @@ export function createRemoteHostsTab(React, api, ui = {}) {
       try {
         const result = await callback()
         await refresh()
-        setNotice(successMessage || diagnosisText(result))
+        setNotice(typeof successMessage === 'function'
+          ? successMessage(result)
+          : successMessage || diagnosisText(result))
       } catch (err) {
         setError(err.message)
       } finally {
@@ -110,15 +113,19 @@ export function createRemoteHostsTab(React, api, ui = {}) {
       event.preventDefault()
       await action('connect', async () => {
         const payload = { ...ssh, port: Number(ssh.port) }
+        let connected
         try {
-          await api.ssh(payload)
+          connected = await api.ssh(payload)
         } catch (err) {
           if (err.code !== 'HOST_KEY_UNTRUSTED' || !err.fingerprint) throw err
           if (!window.confirm(`首次连接需要确认服务器指纹：\n\n${err.fingerprint}\n\n确认这是你的服务器吗？`)) throw new Error('已取消连接，服务器指纹未被信任。')
-          await api.ssh({ ...payload, hostFingerprint: err.fingerprint })
+          connected = await api.ssh({ ...payload, hostFingerprint: err.fingerprint })
         }
         setSsh((current) => ({ ...current, password: '', displayName: '' }))
-      }, 'SSH 主机已连接，后续使用专用密钥。')
+        return connected
+      }, (host) => host.auth_mode === 'password_session'
+        ? 'SSH 主机已连接；网关断线后需要重新输入密码。'
+        : 'SSH 主机已连接，后续使用专用密钥。')
     }
 
     const pairHost = async (event) => {
@@ -129,15 +136,53 @@ export function createRemoteHostsTab(React, api, ui = {}) {
       }, '高级配对已完成。')
     }
 
-    const reconnect = (host) => action(`reconnect:${host.host_id}`, async () => {
+    // 指纹变化只走这一处确认，避免普通重连和密码重认证产生不同保护语义。
+    const reconnectAfterFingerprintCheck = async (hostId, options, canceledMessage) => {
       try {
-        return await api.reconnect(host.host_id)
+        return await api.reconnect(hostId, options)
       } catch (err) {
         if (err.code !== 'HOST_KEY_CHANGED' || !err.fingerprint) throw err
-        if (!window.confirm(`服务器 SSH 指纹已变化：\n\n${err.fingerprint}\n\n确认这是你的服务器吗？`)) throw new Error('已取消重连，服务器新指纹未被信任。')
-        return api.reconnect(host.host_id, err.fingerprint)
+        if (!window.confirm(`服务器 SSH 指纹已变化：\n\n${err.fingerprint}\n\n确认这是你的服务器吗？`)) {
+          throw new Error(canceledMessage)
+        }
+        return api.reconnect(hostId, { ...options, hostFingerprint: err.fingerprint })
+      }
+    }
+
+    const reconnect = (host) => action(`reconnect:${host.host_id}`, async () => {
+      try {
+        return await reconnectAfterFingerprintCheck(
+          host.host_id,
+          {},
+          '已取消重连，服务器新指纹未被信任。',
+        )
+      } catch (err) {
+        if (err.code === 'SSH_REAUTH_REQUIRED') {
+          setReauthPasswords((current) => ({ ...current, [host.host_id]: '' }))
+        }
+        throw err
       }
     }, '重连请求已发送。')
+
+    const reauthenticate = (host, event) => {
+      event.preventDefault()
+      const password = reauthPasswords[host.host_id] ?? ''
+      return action(`reauth:${host.host_id}`, async () => {
+        try {
+          return await reconnectAfterFingerprintCheck(
+            host.host_id,
+            { password },
+            '已取消重认证，服务器新指纹未被信任。',
+          )
+        } finally {
+          setReauthPasswords((current) => {
+            const next = { ...current }
+            delete next[host.host_id]
+            return next
+          })
+        }
+      }, 'SSH 会话已恢复。')
+    }
 
     const toggleJob = (jobId) => setExpanded((current) => ({ ...current, [jobId]: !current[jobId] }))
     const canConnect = mode === 'ssh'
@@ -186,6 +231,12 @@ export function createRemoteHostsTab(React, api, ui = {}) {
               h('div', { className: 'remoteOps__factWide' }, h('dt', null, '任务统计'), h('dd', { title: taskStats(host) }, taskStats(host))),
             ),
             host.last_error || host.recent_error ? h('p', { className: 'remoteOps__hostError' }, host.last_error || host.recent_error) : null,
+            (status === 'reauth_required' || Object.hasOwn(reauthPasswords, host.host_id))
+              ? h('form', { className: 'remoteOps__reauthForm', onSubmit: (event) => reauthenticate(host, event) },
+                h('label', { className: 'remoteOps__field' }, h('span', null, '重新输入 SSH 登录密码'), input({ type: 'password', value: reauthPasswords[host.host_id] ?? '', required: true, autoComplete: 'current-password', onChange: (event) => setReauthPasswords((current) => ({ ...current, [host.host_id]: event.target.value })) })),
+                button({ type: 'submit', disabled: busy !== null || !(reauthPasswords[host.host_id] ?? '') }, busy === `reauth:${host.host_id}` ? '认证中…' : '重新认证'),
+                button({ type: 'button', disabled: busy !== null, onClick: () => setReauthPasswords((current) => { const next = { ...current }; delete next[host.host_id]; return next }) }, '取消'),
+              ) : null,
             h('div', { className: 'remoteOps__hostActions' },
               button({ disabled: busy !== null, onClick: () => reconnect(host) }, busy === `reconnect:${host.host_id}` ? '重连中…' : '重连'),
               button({ disabled: busy !== null, onClick: () => action(`diagnose:${host.host_id}`, () => api.diagnose(host.host_id)) }, '诊断'),

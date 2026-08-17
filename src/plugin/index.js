@@ -90,7 +90,6 @@ export async function apply(ctx, config = {}) {
       systemPrompt: ctx.systemPrompt,
       runner,
       getJobs: () => ctx.get?.('jobs'),
-      onPreExecute: (listener) => ctx.on('tools/pre-execute', listener),
       maxInlineOutputBytes,
     })
     heartbeat = createHeartbeatLoop(runner, Math.max(1, Math.floor(heartbeatTimeoutMs / 3)))

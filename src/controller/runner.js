@@ -312,7 +312,7 @@ export function createRunner({ store, client, now = Date.now,
       const current = store.getHost(hostId)
       if (!current) { const error = new Error(`host not found: ${hostId}`); error.code = 'HOST_NOT_FOUND'; throw error }
       const reconnectClient = client.reconnect
-        ? { heartbeat: (host) => client.reconnect(host) }
+        ? { heartbeat: (host) => client.reconnect(host, options) }
         : client
       if (!options.hostFingerprint) {
         const refreshed = await refreshHost(store, reconnectClient, current, { rethrow: true })

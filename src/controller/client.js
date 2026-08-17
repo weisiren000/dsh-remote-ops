@@ -78,7 +78,7 @@ function authHeaders(host, extra = {}) {
 
 export function createHostClient(options = {}) {
   const maxResponseBodyBytes = options.maxResponseBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES
-  const ssh = createSshClient({
+  const ssh = options.sshClient ?? createSshClient({
     keysDir: options.keysDir,
     sftpLockStaleMs: options.sftpLockStaleMs,
   })
@@ -119,8 +119,8 @@ export function createHostClient(options = {}) {
       const live = await this.heartbeat(host)
       return { ...live, latencyMs: Date.now() - started }
     },
-    async reconnect(host) {
-      if (host.transport === 'ssh') return ssh.reconnect(host)
+    async reconnect(host, reconnectOptions = {}) {
+      if (host.transport === 'ssh') return ssh.reconnect(host, reconnectOptions)
       return this.heartbeat(host)
     },
     async exec(host, spec) {
