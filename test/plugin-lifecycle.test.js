@@ -62,3 +62,37 @@ test('apply 在 Web 路由注册失败时清理已创建的心跳定时器', asy
     globalThis.clearInterval = originalClearInterval
   }
 })
+
+function pluginContext() {
+  const effects = []
+  return {
+    effects,
+    ctx: {
+      tools: { register() {}, guard() {} },
+      systemPrompt: { section() {} },
+      on() {},
+      get() {},
+      effect(callback) { effects.push(callback()) },
+      webServer: { register() { return () => {} } },
+    },
+  }
+}
+
+test('同一数据目录拒绝第二个插件进程并在释放后允许重新获取', async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'remote-ssh-ops-lock-'))
+  const first = pluginContext()
+  const second = pluginContext()
+  const third = pluginContext()
+  await plugin.apply(first.ctx, { dataDir })
+  try {
+    await assert.rejects(plugin.apply(second.ctx, { dataDir }), (error) => {
+      assert.equal(error.code, 'DATA_DIR_IN_USE')
+      return true
+    })
+  } finally {
+    await Promise.all(second.effects.map((dispose) => dispose()))
+    await Promise.all(first.effects.map((dispose) => dispose()))
+  }
+  await plugin.apply(third.ctx, { dataDir })
+  await Promise.all(third.effects.map((dispose) => dispose()))
+})

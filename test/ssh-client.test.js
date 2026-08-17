@@ -163,6 +163,40 @@ test('SSH 首次连接用登录密码回答明确的 keyboard-interactive 密码
   }
 })
 
+test('SSH 密码入口在服务器仅允许公钥时恢复已有 DSH 专用密钥', async () => {
+  const server = await startSshAuthServer({ mode: 'publickey', methods: ['publickey'] })
+  const keysDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ssh-managed-key-recovery-'))
+  const hostId = 'recovered-managed-host'
+  const privateKeyPath = path.join(keysDir, `${hostId}.key`)
+  const managedKey = utils.generateKeyPairSync('ed25519', { comment: 'dsh-managed-recovery' })
+  await fs.writeFile(privateKeyPath, managedKey.private, { encoding: 'utf8', mode: 0o600 })
+  const client = createSshClient({ keysDir, sftpLockStaleMs: 60_000 })
+  try {
+    const host = await connectAfterTrust(client, server.port)
+    assert.equal(host.hostId, hostId)
+    assert.equal(host.authMode, 'key')
+    assert.equal(host.privateKeyPath, privateKeyPath)
+    assert.ok(server.attempts.some(({ method }) => method === 'publickey'))
+  } finally {
+    await closeSshAuthFixture(client, server, keysDir)
+  }
+})
+
+test('SSH 服务器无可用认证方式且没有托管密钥时返回准确错误', async () => {
+  const server = await startSshAuthServer({ mode: 'publickey', methods: ['publickey'] })
+  const keysDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ssh-password-unavailable-'))
+  const client = createSshClient({ keysDir, sftpLockStaleMs: 60_000 })
+  try {
+    await assert.rejects(connectAfterTrust(client, server.port), (error) => {
+      assert.equal(error.code, 'SSH_NO_AUTH_METHODS')
+      assert.match(error.message, /无可用.*认证/)
+      return true
+    })
+  } finally {
+    await closeSshAuthFixture(client, server, keysDir)
+  }
+})
+
 test('SSH 拒绝向 keyboard-interactive OTP 挑战自动提交登录密码', async () => {
   const server = await startSshAuthServer({
     mode: 'keyboard-interactive',
@@ -494,6 +528,62 @@ test('SSH dispose 并发调用都会等待初始连接关闭', async () => {
   })
   await Promise.all([connecting, firstDispose, secondDispose])
 
+  assert.equal(connectError?.code, 'SSH_CLIENT_DISPOSED')
+  assert.equal(endCalls, 1)
+})
+
+test('SSH 托管密钥恢复期间 dispose 不会注册会话且会关闭恢复连接', async () => {
+  const keysDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ssh-recover-dispose-'))
+  const key = utils.generateKeyPairSync('ed25519', { comment: 'dsh-recover-dispose' })
+  await fs.writeFile(path.join(keysDir, 'recover-host.key'), key.private, {
+    encoding: 'utf8',
+    mode: 0o600,
+  })
+  const opening = deferred()
+  let endCalls = 0
+  let openCalls = 0
+  const client = createSshClient({
+    keysDir,
+    sftpLockStaleMs: 60_000,
+    openConnection: () => {
+      openCalls += 1
+      if (openCalls === 1) {
+        const error = new Error('no auth methods')
+        error.code = 'SSH_NO_AUTH_METHODS'
+        return Promise.reject(error)
+      }
+      return opening.promise
+    },
+  })
+  const channel = new EventEmitter()
+  channel.stderr = new EventEmitter()
+  const recoveredConnection = {
+    end() { endCalls += 1 },
+    exec(_command, callback) {
+      queueMicrotask(() => {
+        channel.emit('data', Buffer.from('recover-host\n__DSH_CWD__/srv\nLinux\n'))
+        channel.emit('close', 0, null)
+      })
+      callback(null, channel)
+    },
+  }
+  let connectError
+  const connecting = client.connect({
+    host: '127.0.0.1',
+    port: 1,
+    username: 'nobody',
+    password: 'secret',
+    hostFingerprint: 'SHA256:test',
+  }).catch((error) => { connectError = error })
+  await Promise.resolve()
+  await Promise.resolve()
+  const disposing = client.dispose()
+  opening.resolve({ fingerprint: 'SHA256:test', connection: recoveredConnection })
+  await connecting
+  await disposing
+  await client.dispose()
+
+  assert.equal(openCalls, 2)
   assert.equal(connectError?.code, 'SSH_CLIENT_DISPOSED')
   assert.equal(endCalls, 1)
 })

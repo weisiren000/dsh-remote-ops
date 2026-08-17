@@ -11,6 +11,7 @@ import { DEFAULT_MAX_INLINE_OUTPUT_BYTES, DEFAULT_MAX_PROCESS_OUTPUT_BYTES } fro
 import { DEFAULT_SFTP_LOCK_STALE_MS } from '../controller/sftp.js'
 import { DEFAULT_MAX_JOB_LOG_BYTES } from '../controller/job-log-store.js'
 import { getDefaultControllerDataDir } from '../data-paths.js'
+import { acquireDataDirLock } from '../controller/data-dir-lock.js'
 
 export const name = 'remote-ssh-ops'
 export const inject = ['tools', 'systemPrompt', 'webServer']
@@ -61,18 +62,8 @@ export async function apply(ctx, config = {}) {
   const maxProcessOutputBytes = config.maxProcessOutputBytes ?? DEFAULT_MAX_PROCESS_OUTPUT_BYTES
   const maxJobLogBytes = config.maxJobLogBytes ?? DEFAULT_MAX_JOB_LOG_BYTES
   const sftpLockStaleMs = config.sftpLockStaleMs ?? DEFAULT_SFTP_LOCK_STALE_MS
-  const store = await createControllerStore(dataDir, { maxJobLogBytes })
-  const client = createHostClient({
-    keysDir: path.join(dataDir, 'keys'),
-    maxResponseBodyBytes,
-    sftpLockStaleMs,
-  })
-  const runner = createRunner({
-    store,
-    client,
-    maxInlineOutputBytes,
-    maxProcessOutputBytes,
-  })
+  const releaseDataDir = await acquireDataDirLock(dataDir)
+  let runner
   let heartbeat
   let disposeRoute
   let disposed = false
@@ -81,9 +72,22 @@ export async function apply(ctx, config = {}) {
     disposed = true
     disposeRoute?.()
     await heartbeat?.dispose()
-    await runner.dispose()
+    await runner?.dispose()
+    await releaseDataDir()
   }
   try {
+    const store = await createControllerStore(dataDir, { maxJobLogBytes })
+    const client = createHostClient({
+      keysDir: path.join(dataDir, 'keys'),
+      maxResponseBodyBytes,
+      sftpLockStaleMs,
+    })
+    runner = createRunner({
+      store,
+      client,
+      maxInlineOutputBytes,
+      maxProcessOutputBytes,
+    })
     ctx.effect(() => dispose)
     registerHostTools({
       tools: ctx.tools,

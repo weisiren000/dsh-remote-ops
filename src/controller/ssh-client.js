@@ -12,6 +12,8 @@ import {
 } from './sftp.js'
 import { execChannel } from './ssh-exec.js'
 import { createKeyboardInteractiveAuth } from './ssh-auth.js'
+import { recoverManagedKeyConnection } from './ssh-managed-keys.js'
+import { normalizeConnection, sshHostRecord } from './ssh-target.js'
 import {
   installPublicKey,
   publicKeyFromPrivate,
@@ -21,7 +23,6 @@ import {
 export { execChannel } from './ssh-exec.js'
 
 const { Client, utils } = ssh2
-const DEFAULT_PORT = 22
 const CONNECT_TIMEOUT_MS = 20_000
 
 function codedError(code, message, details = {}) {
@@ -32,7 +33,8 @@ function codedError(code, message, details = {}) {
 }
 
 function connectionError(error) {
-  if (error?.code === 'SSH_INTERACTIVE_AUTH_UNSUPPORTED') return error
+  if (error?.code === 'SSH_INTERACTIVE_AUTH_UNSUPPORTED'
+    || error?.code === 'SSH_NO_AUTH_METHODS') return error
   if (error?.code === 'AUTH_FAILED' || error?.level === 'client-authentication') {
     return codedError('SSH_AUTH_FAILED', 'SSH 身份认证失败', { cause: error })
   }
@@ -49,18 +51,6 @@ function quotePowerShell(value) {
 
 function encodePowerShell(value) {
   return Buffer.from(value, 'utf16le').toString('base64')
-}
-
-function normalizeConnection(input) {
-  const sshHost = String(input.host ?? '').trim()
-  const username = String(input.username ?? '').trim()
-  const port = Number(input.port ?? DEFAULT_PORT)
-  if (!sshHost) throw codedError('SSH_HOST_REQUIRED', '请输入 SSH 服务器地址')
-  if (!username) throw codedError('SSH_USERNAME_REQUIRED', '请输入 SSH 用户名')
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw codedError('SSH_PORT_INVALID', 'SSH 端口必须是 1 到 65535 之间的整数')
-  }
-  return { sshHost, username, port }
 }
 
 // Open one authenticated connection while enforcing explicit host-key trust.
@@ -163,26 +153,6 @@ async function inspectRemote(connection) {
     throw codedError('SSH_UNSUPPORTED_SHELL', '远程 SSH Shell 需要 bash 或 PowerShell')
   }
   return { hostname: lines[0], cwd, os: 'windows', dialect: 'pwsh' }
-}
-
-function sshHostRecord({ input, target, remote, hostId, fingerprint, authMode, privateKeyPath }) {
-  return {
-    hostId,
-    displayName: input.displayName || remote.hostname || target.sshHost,
-    address: `ssh://${target.sshHost}:${target.port}`,
-    transport: 'ssh',
-    sshHost: target.sshHost,
-    sshPort: target.port,
-    sshUsername: target.username,
-    hostFingerprint: fingerprint,
-    authMode,
-    ...(privateKeyPath ? { privateKeyPath } : {}),
-    online: true,
-    cwd: input.workdir || remote.cwd,
-    os: remote.os,
-    dialect: remote.dialect,
-    lastHeartbeatAt: Date.now(),
-  }
 }
 
 export function createSshClient({ keysDir, sftpLockStaleMs, openConnection: open = openConnection }) {
@@ -310,12 +280,31 @@ export function createSshClient({ keysDir, sftpLockStaleMs, openConnection: open
       const task = (async () => {
         let opened
         let verified
+        let recovered
         try {
-          opened = await open({
-            ...target,
-            password: input.password,
-            hostFingerprint: input.hostFingerprint,
-          })
+          try {
+            opened = await open({
+              ...target,
+              password: input.password,
+              hostFingerprint: input.hostFingerprint,
+            })
+          } catch (error) {
+            if (error?.code !== 'SSH_NO_AUTH_METHODS') throw error
+            recovered = await recoverManagedKeyConnection({
+              keysDir, target, hostFingerprint: input.hostFingerprint,
+              openConnection: open, inspectRemote,
+            })
+            if (!recovered) throw error
+            // 恢复可能耗时较长：注册会话前确认客户端仍存活，
+            // 避免 dispose 后仍把恢复连接记入会话；失败时由外层 catch 关闭连接。
+            assertActive()
+            rememberSession(recovered.hostId, recovered.opened.connection)
+            return sshHostRecord({
+              input, target, remote: recovered.remote, hostId: recovered.hostId,
+              fingerprint: recovered.opened.fingerprint, authMode: 'key',
+              privateKeyPath: recovered.privateKeyPath,
+            })
+          }
           assertActive()
           const remote = await inspectRemote(opened.connection)
           assertActive()
@@ -367,6 +356,7 @@ export function createSshClient({ keysDir, sftpLockStaleMs, openConnection: open
         } catch (error) {
           opened?.connection?.end?.()
           verified?.connection?.end?.()
+          recovered?.opened?.connection?.end?.()
           await unlink(privateKeyPath).catch(() => {})
           throw error
         }

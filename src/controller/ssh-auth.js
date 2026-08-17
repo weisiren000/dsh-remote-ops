@@ -14,6 +14,12 @@ function unsupportedInteractiveError() {
   return error
 }
 
+function noAuthMethodsError() {
+  const error = new Error('服务器无可用 SSH 认证方式')
+  error.code = 'SSH_NO_AUTH_METHODS'
+  return error
+}
+
 function isPasswordChallenge(name, instructions, prompts, alreadyAnswered) {
   if (alreadyAnswered || !Array.isArray(prompts) || prompts.length !== 1) return false
   const [challenge] = prompts
@@ -46,6 +52,10 @@ export function createKeyboardInteractiveAuth(loginPassword, reject) {
       currentMethod = AUTH_METHODS.find((method) => (
         methodsLeft?.includes(method) && !attemptedMethods.has(method)
       ))
+      if (!currentMethod && attemptedMethods.size === 0) {
+        reject(noAuthMethodsError())
+        return false
+      }
       if (!currentMethod) return false
       attemptedMethods.add(currentMethod)
       return currentMethod

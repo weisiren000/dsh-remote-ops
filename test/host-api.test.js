@@ -236,6 +236,28 @@ test('无法自动处理的 SSH 交互式认证返回 401 和专用错误码', a
   assert.equal(response.body.code, 'SSH_INTERACTIVE_AUTH_UNSUPPORTED')
 })
 
+test('服务器无可用 SSH 认证方式返回 401 和准确错误码', async () => {
+  const handle = createHostApiHandler({
+    runner: {
+      async connectSsh() {
+        throw Object.assign(new Error('服务器未开放可用的 SSH 认证方式'), {
+          code: 'SSH_NO_AUTH_METHODS',
+        })
+      },
+    },
+  })
+  const response = mockRes()
+
+  await handle(mockReq({
+    method: 'POST',
+    url: '/remote-ssh-ops/v1/hosts/ssh',
+    body: { host: '127.0.0.1', port: 22, username: 'user', password: 'secret' },
+  }), response)
+
+  assert.equal(response.statusCode, 401)
+  assert.equal(response.body.code, 'SSH_NO_AUTH_METHODS')
+})
+
 test('SSH 重认证透传临时密码并返回认证模式，不把密码回显到主机数据', async () => {
   let received
   const handle = createHostApiHandler({
